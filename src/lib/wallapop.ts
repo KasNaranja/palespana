@@ -61,11 +61,15 @@ function itemToListing(item: any): Listing | null {
 
   const currency: string = item.price?.currency || item.currency || "EUR";
 
-  // Each image exposes urls.{small,medium,big}; prefer the big one for vision.
+  // Each image exposes urls.{small,medium,big}; the big one goes to vision, the
+  // small one (W320) is the fast card thumbnail.
   const images: any[] = Array.isArray(item.images) ? item.images : [];
   const photoUrls: string[] = images
     .map((im) => im?.urls?.big || im?.urls?.medium || im?.urls?.small)
     .filter((u: unknown): u is string => typeof u === "string");
+  const firstImg = images[0]?.urls;
+  const thumbUrl: string | null =
+    firstImg?.small || firstImg?.medium || photoUrls[0] || null;
 
   const slug: string | null =
     typeof item.web_slug === "string" ? item.web_slug : null;
@@ -85,6 +89,7 @@ function itemToListing(item: any): Listing | null {
     shippingPrice: null, // Wallapop shipping is quoted later; unknown up front
     currency: String(currency),
     photoUrls,
+    thumbUrl,
     listingUrl: url,
     sellerCountry: country,
     languageVerdict: "pending",

@@ -193,6 +193,19 @@ function itemToListing(item: any): Listing | null {
     if (single) photoUrls = [single];
   }
 
+  // Small thumbnail for the card grid (much lighter than full_size on mobile).
+  // Vinted photos expose a `thumbnails` array; ~310px wide is ideal for a card.
+  const mainPhoto = orderedPhotos[0] || item.photo;
+  const thumbs: any[] = Array.isArray(mainPhoto?.thumbnails)
+    ? mainPhoto.thumbnails
+    : [];
+  const thumbUrl: string | null =
+    thumbs.find((t) => t?.type === "thumb310x430")?.url ||
+    thumbs.find((t) => t?.width >= 280 && t?.width <= 480)?.url ||
+    mainPhoto?.url ||
+    photoUrls[0] ||
+    null;
+
   const url: string =
     item.url ||
     `${base()}/items/${id}${item.title ? "-" + slugify(item.title) : ""}`;
@@ -205,6 +218,7 @@ function itemToListing(item: any): Listing | null {
     shippingPrice: null, // not present in catalog list; enriched later if available
     currency: String(currency),
     photoUrls,
+    thumbUrl,
     listingUrl: url,
     sellerCountry: item?.user?.country_iso_code || null,
     languageVerdict: "pending",

@@ -65,7 +65,8 @@ export interface Listing {
   price: number; // item price
   shippingPrice: number | null; // best-guess shipping; null if unknown
   currency: string; // e.g. "EUR"
-  photoUrls: string[];
+  photoUrls: string[]; // full-size, used for the AI vision analysis (needs detail)
+  thumbUrl: string | null; // small image for the card grid (fast on mobile)
   listingUrl: string;
   sellerCountry: string | null; // ISO-2 code, e.g. "ES", "FR"
   languageVerdict: LanguageVerdict;

@@ -21,7 +21,8 @@ const SOURCE_LOGO: Record<MarketSource, string> = {
 export function ListingCard({ listing }: { listing: Listing }) {
   const [copied, setCopied] = useState(false);
   const total = totalPrice(listing);
-  const photo = listing.photoUrls[0];
+  // Prefer the light thumbnail for the card; fall back to the full photo.
+  const photo = listing.thumbUrl ?? listing.photoUrls[0];
 
   function open() {
     window.open(listing.listingUrl, "_blank", "noopener,noreferrer");

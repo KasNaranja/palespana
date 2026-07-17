@@ -173,6 +173,7 @@ export function getDemoListings(query: string): Listing[] {
     shippingPrice: s.shipping,
     currency: "EUR",
     photoUrls: s.photos,
+    thumbUrl: s.photos[0] ?? null,
     listingUrl:
       "https://www.vinted.es/catalog?search_text=" +
       encodeURIComponent(query || "Pokémon Esmeralda"),
