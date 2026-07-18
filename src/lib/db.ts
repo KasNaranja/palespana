@@ -125,6 +125,8 @@ function cacheKey(source: MarketSource, vintedId: string): string {
 export async function getCachedVerdicts(
   keys: { source: MarketSource; vintedId: string }[]
 ): Promise<(CachedVerdict | null)[]> {
+  // Caching disabled → every listing is a "miss" so it gets re-analyzed live.
+  if (!config.cacheEnabled) return new Array(keys.length).fill(null);
   loadFileOnce();
   const cks = keys.map((k) => cacheKey(k.source, k.vintedId));
   const result: (CachedVerdict | null)[] = new Array(keys.length).fill(null);
@@ -168,6 +170,7 @@ export function setCachedVerdict(
   evidence: string | null,
   analyzedAt: string
 ): void {
+  if (!config.cacheEnabled) return; // nothing is stored
   const ck = cacheKey(source, vintedId);
   const entry: CacheEntry = { verdict, evidence, analyzedAt };
   _cache[ck] = entry; // L1

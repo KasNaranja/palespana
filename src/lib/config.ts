@@ -36,6 +36,10 @@ export const config = {
   ebayClientId: process.env.EBAY_CLIENT_ID?.trim() || "",
   ebayClientSecret: process.env.EBAY_CLIENT_SECRET?.trim() || "",
   dbPath: process.env.CAZAPAL_DB_PATH?.trim() || "",
+  // Verdict memory OFF by design: every search re-analyzes live, nothing is
+  // stored. Set ENABLE_CACHE=true to remember each listing's (permanent)
+  // language and save Gemini's daily quota.
+  cacheEnabled: (process.env.ENABLE_CACHE || "false").toLowerCase() === "true",
   forcedDemo: (process.env.DEMO_MODE || "").toLowerCase() === "true",
 };
 
