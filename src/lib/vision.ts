@@ -82,18 +82,48 @@ async function downloadImage(url: string): Promise<ImagePart | null> {
   }
 }
 
-// ── Free-tier rate limiter ─────────────────────────────────────
-// Gemini's free tier caps requests per minute. We serialize calls with a
-// minimum interval so a big search stays under the cap instead of getting 429s.
-let lastCallAt = 0;
-let chain: Promise<void> = Promise.resolve();
-function throttle(): Promise<void> {
-  chain = chain.then(async () => {
-    const wait = config.geminiMinIntervalMs - (Date.now() - lastCallAt);
-    if (wait > 0) await new Promise((r) => setTimeout(r, wait));
-    lastCallAt = Date.now();
+// ── Multi-key free-tier limiter ────────────────────────────────
+// Each Gemini key (from a separate Google project) has its OWN free daily quota
+// and its own per-minute limit. We keep a throttle chain PER key and round-robin
+// across them, so N keys give ~N× the throughput AND N× the daily budget. A key
+// that returns a daily "quota exhausted" 429 is parked for a while so we stop
+// hammering it and lean on the others.
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+interface KeyState {
+  key: string;
+  lastCallAt: number;
+  chain: Promise<void>;
+  parkedUntil: number; // while Date.now() < this, skip the key
+}
+const keyStates: KeyState[] = config.geminiKeys.map((key) => ({
+  key,
+  lastCallAt: 0,
+  chain: Promise.resolve(),
+  parkedUntil: 0,
+}));
+let rrIndex = 0;
+
+/** Space this key's calls by geminiMinIntervalMs (each key independently). */
+function throttleKey(ks: KeyState): Promise<void> {
+  ks.chain = ks.chain.then(async () => {
+    const wait = config.geminiMinIntervalMs - (Date.now() - ks.lastCallAt);
+    if (wait > 0) await sleep(wait);
+    ks.lastCallAt = Date.now();
   });
-  return chain;
+  return ks.chain;
+}
+
+/** Next non-parked, not-yet-tried key (round-robin). Null if none available. */
+function pickKey(tried: Set<string>): KeyState | null {
+  const now = Date.now();
+  for (let i = 0; i < keyStates.length; i++) {
+    const ks = keyStates[(rrIndex + i) % keyStates.length];
+    if (tried.has(ks.key) || ks.parkedUntil > now) continue;
+    rrIndex = (rrIndex + i + 1) % keyStates.length;
+    return ks;
+  }
+  return null;
 }
 
 function parseVerdict(text: string): VisionResult | null {
@@ -126,7 +156,7 @@ function parseVerdict(text: string): VisionResult | null {
  * so the caller can degrade to "inconclusive".
  */
 export async function analyzeImages(imageUrls: string[]): Promise<VisionResult> {
-  if (!config.geminiKey) {
+  if (keyStates.length === 0) {
     throw new Error("Falta GEMINI_API_KEY para el análisis de visión.");
   }
 
@@ -167,35 +197,47 @@ export async function analyzeImages(imageUrls: string[]): Promise<VisionResult> 
     `https://generativelanguage.googleapis.com/v1beta/models/` +
     `${encodeURIComponent(config.geminiModel)}:generateContent`;
 
-  // Retry transient failures (429 rate-limit, 503 overload). On the free tier
-  // these are common under load; since images cost nothing, retrying a couple
-  // of times recovers a real verdict instead of degrading to "inconclusive".
-  const MAX_ATTEMPTS = 3;
-  let res!: Response;
-  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-    await throttle();
-    res = await fetch(url, {
+  // Try across the keys: each attempt uses a DIFFERENT key (round-robin). A
+  // per-DAY quota 429 parks that key (~30 min) so we lean on the others; a
+  // per-minute 429 / 503 just moves to the next key. After every non-parked key
+  // is tried, one backoff pass is allowed for transient blips.
+  const tried = new Set<string>();
+  let res: Response | null = null;
+  const maxTries = keyStates.length + 1;
+  for (let attempt = 0; attempt < maxTries; attempt++) {
+    let ks = pickKey(tried);
+    if (!ks) {
+      if (tried.size === 0) break; // no usable keys at all
+      tried.clear(); // second pass over the non-parked keys
+      await sleep(1500);
+      ks = pickKey(tried);
+      if (!ks) break;
+    }
+    tried.add(ks.key);
+    await throttleKey(ks);
+    const r = await fetch(url, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "x-goog-api-key": config.geminiKey,
+        "x-goog-api-key": ks.key,
       },
       body: JSON.stringify(body),
     });
-
-    if (res.status === 429 || res.status === 503) {
-      if (attempt < MAX_ATTEMPTS) {
-        // Back off progressively before the next attempt (throttle adds more).
-        await new Promise((r) => setTimeout(r, 1500 * attempt));
-        continue;
+    if (r.status === 429) {
+      const detail = await r.text().catch(() => "");
+      if (/per\s*day|resource_exhausted/i.test(detail)) {
+        ks.parkedUntil = Date.now() + 30 * 60 * 1000; // daily quota → park
       }
-      throw new Error(
-        res.status === 429 ? "gemini_rate_limited" : "gemini_overloaded"
-      );
+      continue; // move to another key
     }
+    if (r.status === 503) continue; // overloaded → another key
+    res = r;
     break;
   }
 
+  if (!res) {
+    throw new Error("gemini_all_keys_exhausted");
+  }
   if (!res.ok) {
     const detail = await res.text().catch(() => "");
     throw new Error(`gemini_http_${res.status}: ${detail.slice(0, 200)}`);

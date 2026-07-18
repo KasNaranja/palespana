@@ -19,8 +19,21 @@ export const COST_GUARD = {
   ANALYSIS_CONCURRENCY: 2,
 };
 
+// One or more Gemini keys. Each Google project has its OWN free daily quota, so
+// several keys (from several projects) multiply both the daily limit AND the
+// throughput (vision.ts round-robins across them in parallel). Set GEMINI_API_KEYS
+// as a comma-separated list; falls back to the single GEMINI_API_KEY.
+const geminiKeys = (
+  process.env.GEMINI_API_KEYS ||
+  process.env.GEMINI_API_KEY ||
+  ""
+)
+  .split(",")
+  .map((k) => k.trim())
+  .filter(Boolean);
+
 export const config = {
-  geminiKey: process.env.GEMINI_API_KEY?.trim() || "",
+  geminiKeys,
   geminiModel: process.env.GEMINI_VISION_MODEL?.trim() || "gemini-flash-lite-latest",
   // Minimum ms between Gemini requests (free tier ~ a handful per minute).
   geminiMinIntervalMs: Number(process.env.GEMINI_MIN_INTERVAL_MS || "4500"),
@@ -50,7 +63,7 @@ export const config = {
  */
 export function isDemoMode(): boolean {
   if (config.forcedDemo) return true;
-  if (!config.geminiKey) return true;
+  if (config.geminiKeys.length === 0) return true;
   if (!config.vintedEnabled) return true;
   return false;
 }
@@ -59,8 +72,9 @@ export function isDemoMode(): boolean {
 export function demoReason(): string | null {
   if (!isDemoMode()) return null;
   if (config.forcedDemo) return "DEMO_MODE está activado.";
-  if (!config.geminiKey && !config.vintedEnabled)
+  const noKey = config.geminiKeys.length === 0;
+  if (noKey && !config.vintedEnabled)
     return "Falta la clave de Gemini y ENABLE_VINTED no está activo.";
-  if (!config.geminiKey) return "Falta la clave de Gemini (GEMINI_API_KEY).";
+  if (noKey) return "Falta la clave de Gemini (GEMINI_API_KEY).";
   return "ENABLE_VINTED no está activo.";
 }

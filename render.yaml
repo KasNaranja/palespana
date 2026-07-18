@@ -25,7 +25,13 @@ services:
       - key: WALLAPOP_LNG
         value: "-3.7038"
       # Secrets — set their values in the Render dashboard, never committed:
+      # One Gemini key:
       - key: GEMINI_API_KEY
+        sync: false
+      # …or VARIAS claves separadas por comas (cada una de un proyecto Google
+      # distinto → multiplica límite diario y velocidad). Tiene prioridad sobre
+      # GEMINI_API_KEY. Ej: clave1,clave2,clave3
+      - key: GEMINI_API_KEYS
         sync: false
       # Persistent verdict cache (Upstash Redis, free) so redeploys don't wipe
       # the cache and re-burn Gemini's daily quota. Optional: without them the

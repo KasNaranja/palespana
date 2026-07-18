@@ -7,7 +7,7 @@
 // the Node server runtime (next dev / next start), not edge/serverless.
 // ─────────────────────────────────────────────────────────────
 
-import { COST_GUARD, isDemoMode } from "./config";
+import { config, COST_GUARD, isDemoMode } from "./config";
 import {
   getCachedVerdicts,
   getListings,
@@ -208,7 +208,14 @@ export async function startAnalysis(searchId: string): Promise<void> {
       );
     } else {
       const imagesBudget = { remaining: COST_GUARD.MAX_IMAGES_PER_SEARCH };
-      await runPool(pending, COST_GUARD.ANALYSIS_CONCURRENCY, (l) =>
+      // Run as many listings concurrently as we have Gemini keys, so each key is
+      // busy at once (each is throttled independently in vision.ts). One key →
+      // the usual 2; three keys → 3 in parallel ≈ 3× throughput.
+      const concurrency = Math.max(
+        COST_GUARD.ANALYSIS_CONCURRENCY,
+        config.geminiKeys.length
+      );
+      await runPool(pending, concurrency, (l) =>
         analyzeOneLive(searchId, l, imagesBudget)
       );
     }
