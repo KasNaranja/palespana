@@ -9,7 +9,7 @@
 
 import { COST_GUARD, isDemoMode } from "./config";
 import {
-  getCachedVerdict,
+  getCachedVerdicts,
   getListings,
   updateListingVerdict,
 } from "./db";
@@ -179,24 +179,28 @@ export async function startAnalysis(searchId: string): Promise<void> {
     // list here (that would truncate the second source).
     const all = getListings(searchId);
 
-    // Apply the cross-search cache first (skip re-paying for seen items).
+    // Apply the cross-search cache first (skip re-paying for seen items). One
+    // batched read (Redis MGET when configured) instead of N round-trips.
+    const candidates = all.filter((l) => l.languageVerdict === "pending");
+    const cached = await getCachedVerdicts(
+      candidates.map((l) => ({ source: l.source, vintedId: l.vintedId }))
+    );
     const pending: Listing[] = [];
-    for (const l of all) {
-      if (l.languageVerdict !== "pending") continue;
-      const cached = getCachedVerdict(l.source, l.vintedId);
-      if (cached && cached.verdict !== "pending") {
+    candidates.forEach((l, i) => {
+      const c = cached[i];
+      if (c && c.verdict !== "pending") {
         updateListingVerdict(
           searchId,
           l.source,
           l.vintedId,
-          cached.verdict as LanguageVerdict,
-          cached.evidence,
-          cached.analyzedAt
+          c.verdict as LanguageVerdict,
+          c.evidence,
+          c.analyzedAt
         );
       } else {
         pending.push(l);
       }
-    }
+    });
 
     if (demo) {
       await runPool(pending, COST_GUARD.ANALYSIS_CONCURRENCY, (l) =>

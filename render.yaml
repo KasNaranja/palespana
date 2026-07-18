@@ -24,6 +24,13 @@ services:
         value: "40.4168"
       - key: WALLAPOP_LNG
         value: "-3.7038"
-      # Secret — set its value in the Render dashboard, never committed:
+      # Secrets — set their values in the Render dashboard, never committed:
       - key: GEMINI_API_KEY
+        sync: false
+      # Persistent verdict cache (Upstash Redis, free) so redeploys don't wipe
+      # the cache and re-burn Gemini's daily quota. Optional: without them the
+      # app falls back to an in-memory/file cache.
+      - key: UPSTASH_REDIS_REST_URL
+        sync: false
+      - key: UPSTASH_REDIS_REST_TOKEN
         sync: false
