@@ -19,6 +19,7 @@ function normalize(s: string): string {
   t = t
     .replace(/\bplay station\b/g, "playstation")
     .replace(/\bplaystation ([1-5])\b/g, "ps$1")
+    .replace(/\bplaystation([1-5])\b/g, "ps$1") // no space: "PlayStation4"
     .replace(/\bplaystation one\b/g, "ps1")
     .replace(/\bps ([1-5])\b/g, "ps$1")
     .replace(/\bps one\b/g, "ps1")
@@ -129,6 +130,40 @@ const PLATFORM_PATTERNS: Partial<Record<ConsoleKey, RegExp>> = {
   xbox: /\bxbox\b|\bseries [xs]\b|\bone [xs]\b/,
 };
 
+// Extra platforms that are NOT selectable chips but must still cause a listing to
+// be dropped when a strict console is chosen (e.g. searching PS4 must hide a "PC"
+// or "PSP" copy). Kept separate from PLATFORM_PATTERNS since you can't pick them.
+// All use word boundaries so they only match standalone tokens ("ds" won't match
+// inside "3ds" or a game name).
+const OTHER_PLATFORM_PATTERNS: RegExp[] = [
+  /\bpc\b/,
+  /\bsteam\b/,
+  /\bordenador\b/,
+  /\bpsp\b/,
+  /\bps ?vita\b/,
+  /\bvita\b/,
+  /\bwii ?u\b/,
+  /\bwii\b/,
+  /\b3ds\b/,
+  /\b2ds\b/,
+  /\bnds\b/,
+  /\bds\b/,
+  /\bgba\b/,
+  /\bgameboy\b/,
+  /\bgame boy\b/,
+  /\bgamecube\b/,
+  /\bngc\b/,
+  /\bn64\b/,
+  /\bnintendo 64\b/,
+  /\bsnes\b/,
+  /\bsuper nintendo\b/,
+  /\bnes\b/,
+  /\bmega ?drive\b/,
+  /\bgenesis\b/,
+  /\bdreamcast\b/,
+  /\bsaturn\b/,
+];
+
 // Consoles we filter strictly. "todas"/"otras"/"nintendo_handheld" are broad or
 // catch-all, so they don't strictly filter (nintendo_handheld spans Game Boy,
 // DS, 3DS… — too many title forms to match cleanly).
@@ -147,10 +182,15 @@ function consoleAllows(title: string, sel: ConsoleKey): boolean {
   const norm = normalize(title);
   const selRe = PLATFORM_PATTERNS[sel];
   if (selRe && selRe.test(norm)) return true; // explicitly the selected console
+  // Explicitly a DIFFERENT selectable console (e.g. PS3 when PS4 is chosen).
   for (const [k, re] of Object.entries(PLATFORM_PATTERNS)) {
-    if (k !== sel && re.test(norm)) return false; // explicitly a different one
+    if (k !== sel && re.test(norm)) return false;
   }
-  return true; // no console named → ambiguous → keep
+  // Explicitly a non-selectable platform (PC, PSP, Wii, DS, retro…).
+  for (const re of OTHER_PLATFORM_PATTERNS) {
+    if (re.test(norm)) return false;
+  }
+  return true; // no platform named → ambiguous → keep
 }
 
 /** Remove duplicate vintedIds, keeping the first occurrence (Vinted paginates
