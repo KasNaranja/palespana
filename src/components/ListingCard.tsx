@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { LanguageBadge } from "./LanguageBadge";
-import { countryFlag, countryName, formatPrice } from "@/lib/format";
+import { formatPrice } from "@/lib/format";
 import {
   MARKET_LABELS,
   totalPrice,
@@ -155,24 +155,20 @@ export function ListingCard({ listing }: { listing: Listing }) {
         </h3>
 
         <div className="mt-auto flex items-end justify-between gap-1">
-          <div className="min-w-0">
-            <div className="font-display text-xl leading-none text-white sm:text-2xl">
-              {formatPrice(total, listing.currency)}
-            </div>
-            <div className="mt-1 truncate font-mono text-[10px] text-texto-3 sm:text-[11px]">
-              {formatPrice(listing.price, listing.currency)}
-              {listing.shippingPrice != null
-                ? ` + ${formatPrice(listing.shippingPrice, listing.currency)} envío`
-                : " · envío no indicado"}
-            </div>
+          <div className="font-display text-xl leading-none text-white sm:text-2xl">
+            {formatPrice(total, listing.currency)}
           </div>
-          <span
-            className="shrink-0 text-base sm:text-xl"
-            title={countryName(listing.sellerCountry)}
-            aria-label={countryName(listing.sellerCountry)}
-          >
-            {countryFlag(listing.sellerCountry)}
-          </span>
+          {/* Spain flag ONLY on Spanish editions (PAL España); nothing on
+              playable-in-Spanish / other-language copies. */}
+          {listing.languageVerdict === "es" && (
+            <span
+              className="shrink-0 text-base sm:text-xl"
+              title="Edición española (PAL España)"
+              aria-label="Edición española"
+            >
+              🇪🇸
+            </span>
+          )}
         </div>
       </div>
     </div>

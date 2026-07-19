@@ -141,13 +141,14 @@ export default function Home() {
     <main className="mx-auto min-h-screen w-full max-w-6xl px-4 pb-24">
       {!showResults ? (
         <section className="mx-auto max-w-2xl pt-8 sm:pt-14">
-          {/* Brand logo on a dark panel so the white "PAL" shows clearly. */}
-          <div className="mx-auto flex max-w-xs items-center justify-center rounded-3xl border border-borde bg-panel px-6 py-6">
+          {/* Brand logo straight on the dark page background — the PNG is
+              transparent and its white "PAL" reads on carbon, so no plate. */}
+          <div className="flex justify-center">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src="/brand/palespana-logo.png"
               alt="PAL España"
-              className="h-40 w-auto sm:h-48"
+              className="h-44 w-auto sm:h-56"
             />
           </div>
           <p className="mx-auto mt-5 max-w-lg text-center text-texto-2">
