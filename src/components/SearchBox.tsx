@@ -28,7 +28,7 @@ export const SearchBox = forwardRef<HTMLInputElement, Props>(function SearchBox(
     >
       <div className="relative flex-1">
         <span
-          className="pointer-events-none absolute inset-y-0 left-4 flex items-center text-stone-400"
+          className="pointer-events-none absolute inset-y-0 left-4 flex items-center text-texto-3"
           aria-hidden
         >
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
@@ -51,10 +51,10 @@ export const SearchBox = forwardRef<HTMLInputElement, Props>(function SearchBox(
           placeholder="¿Qué juego buscas?"
           aria-label="¿Qué juego buscas?"
           className={[
-            "w-full rounded-2xl border border-stone-200 bg-white pl-12 pr-4",
-            "text-stone-900 placeholder:text-stone-400 shadow-sm",
-            "focus:border-brand-400 focus:outline-none focus:ring-4 focus:ring-brand-100",
-            hero ? "h-14 text-lg" : "h-12 text-base",
+            "w-full rounded-input border border-borde-fuerte bg-carbon pl-12 pr-4",
+            "text-texto-1 placeholder:text-texto-3",
+            "focus:border-brand-500 focus:outline-none focus:ring-4 focus:ring-brand-500/25",
+            hero ? "h-[52px] text-lg" : "h-12 text-base",
           ].join(" ")}
         />
       </div>
@@ -62,9 +62,9 @@ export const SearchBox = forwardRef<HTMLInputElement, Props>(function SearchBox(
         type="submit"
         disabled={loading || !value.trim()}
         className={[
-          "inline-flex items-center justify-center gap-2 rounded-2xl bg-brand-600 px-6 font-semibold text-white",
-          "transition hover:bg-brand-700 disabled:cursor-not-allowed disabled:opacity-50",
-          hero ? "h-14 text-lg" : "h-12 text-base",
+          "inline-flex items-center justify-center gap-2 rounded-input bg-brand-600 px-6 font-semibold text-white",
+          "transition hover:bg-brand-500 disabled:cursor-not-allowed disabled:opacity-50",
+          hero ? "h-[52px] text-lg" : "h-12 text-base",
         ].join(" ")}
       >
         {loading ? (

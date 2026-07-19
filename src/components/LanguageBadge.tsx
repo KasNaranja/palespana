@@ -49,7 +49,7 @@ export function LanguageBadge({
         aria-haspopup="dialog"
         aria-expanded={open}
         className={[
-          "inline-flex max-w-full items-center gap-1 rounded-full border px-1.5 py-0.5 text-[11px] font-semibold sm:gap-1.5 sm:px-2.5 sm:py-1 sm:text-xs",
+          "inline-flex max-w-full items-center gap-1 rounded-full border px-1.5 py-0.5 text-[11px] font-semibold shadow-sm backdrop-blur-sm sm:gap-1.5 sm:px-2.5 sm:py-1 sm:text-xs",
           meta.className,
           pending ? "animate-pulseSoft" : "",
         ].join(" ")}
@@ -65,13 +65,13 @@ export function LanguageBadge({
         <div
           role="dialog"
           aria-label="Evidencia del análisis"
-          className="absolute z-30 mt-2 w-64 rounded-xl border border-stone-200 bg-white p-3 text-left shadow-xl"
+          className="absolute bottom-full left-0 z-30 mb-2 w-60 rounded-xl border border-borde bg-panel p-3 text-left shadow-2xl"
           onClick={(e) => e.stopPropagation()}
         >
-          <p className="text-xs font-semibold text-stone-500">
+          <p className="font-mono text-[10px] font-semibold uppercase tracking-wide text-texto-3">
             {pending ? "Análisis en curso" : "Evidencia de la IA"}
           </p>
-          <p className="mt-1 text-sm leading-snug text-stone-800">
+          <p className="mt-1 text-sm leading-snug text-texto-1">
             {evidence || defaultPending}
           </p>
         </div>

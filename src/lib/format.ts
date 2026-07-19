@@ -46,7 +46,7 @@ export function verdictMeta(v: LanguageVerdict): VerdictMeta {
       return {
         label: "✓ Edición española",
         short: "Edición española",
-        className: "bg-verdict-esBg text-verdict-es border-verdict-es/30",
+        className: "bg-verdict-esBg text-verdict-es border-verdict-esBorder",
         dotClassName: "bg-verdict-es",
       };
     case "es_multi":
@@ -54,7 +54,7 @@ export function verdictMeta(v: LanguageVerdict): VerdictMeta {
         label: "✓ Jugable en español",
         short: "Jugable en español",
         className:
-          "bg-verdict-esMultiBg text-verdict-esMulti border-verdict-esMulti/30",
+          "bg-verdict-esMultiBg text-verdict-esMulti border-verdict-esMultiBorder",
         dotClassName: "bg-verdict-esMulti",
       };
     case "other":
@@ -62,7 +62,7 @@ export function verdictMeta(v: LanguageVerdict): VerdictMeta {
         label: "✗ Otro idioma",
         short: "Otro idioma",
         className:
-          "bg-verdict-otherBg text-verdict-other border-verdict-other/30",
+          "bg-verdict-otherBg text-verdict-other border-verdict-otherBorder",
         dotClassName: "bg-verdict-other",
       };
     case "inconclusive":
@@ -70,7 +70,7 @@ export function verdictMeta(v: LanguageVerdict): VerdictMeta {
         label: "? No concluyente",
         short: "No concluyente",
         className:
-          "bg-verdict-inconcBg text-verdict-inconc border-verdict-inconc/30",
+          "bg-verdict-inconcBg text-verdict-inconc border-verdict-inconcBorder",
         dotClassName: "bg-verdict-inconc",
       };
     default:
@@ -78,7 +78,7 @@ export function verdictMeta(v: LanguageVerdict): VerdictMeta {
         label: "Analizando…",
         short: "Analizando…",
         className:
-          "bg-verdict-pendingBg text-verdict-pending border-verdict-pending/20",
+          "bg-verdict-pendingBg text-verdict-pending border-verdict-pendingBorder",
         dotClassName: "bg-verdict-pending",
       };
   }

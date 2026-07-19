@@ -28,8 +28,8 @@ export function ConsoleChips({
               "shrink-0 whitespace-nowrap rounded-full px-3.5 py-2 text-sm font-medium transition min-h-[40px]",
               "border",
               active
-                ? "bg-brand-600 text-white border-brand-600 shadow-sm"
-                : "bg-white text-stone-700 border-stone-200 hover:border-brand-300 hover:text-brand-700",
+                ? "bg-brand-600 text-white border-brand-600"
+                : "bg-carbon text-texto-2 border-borde-fuerte hover:border-brand-500/60 hover:text-texto-1",
             ].join(" ")}
           >
             {opt.label}

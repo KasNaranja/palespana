@@ -52,9 +52,9 @@ export function ListingCard({ listing }: { listing: Listing }) {
           open();
         }
       }}
-      className="group flex cursor-pointer flex-col overflow-hidden rounded-xl border border-stone-200 bg-white shadow-sm transition hover:-translate-y-0.5 hover:shadow-md focus:outline-none focus:ring-4 focus:ring-brand-100"
+      className="group flex cursor-pointer flex-col overflow-hidden rounded-card border border-borde bg-panel transition hover:-translate-y-0.5 hover:border-borde-fuerte focus:outline-none focus:ring-2 focus:ring-brand-500/60"
     >
-      <div className="relative aspect-[3/4] w-full overflow-hidden bg-stone-100">
+      <div className="relative aspect-[3/4] w-full overflow-hidden bg-carbon">
         {photo ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img
@@ -64,25 +64,40 @@ export function ListingCard({ listing }: { listing: Listing }) {
             className="h-full w-full object-cover transition duration-300 group-hover:scale-[1.03]"
           />
         ) : (
-          <div className="flex h-full w-full items-center justify-center text-stone-300">
+          <div className="flex h-full w-full items-center justify-center text-sm text-texto-3">
             sin foto
           </div>
         )}
 
-        <div className="absolute left-1.5 top-1.5 right-10">
-          <LanguageBadge
-            verdict={listing.languageVerdict}
-            evidence={listing.verdictEvidence}
-          />
+        {/* Source logo — top-left (guía §5) */}
+        <div className="absolute left-1.5 top-1.5">
+          {SOURCE_LOGO[listing.source] ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={SOURCE_LOGO[listing.source]}
+              alt={MARKET_LABELS[listing.source]}
+              title={MARKET_LABELS[listing.source]}
+              className="h-7 w-7 rounded-lg shadow-md ring-1 ring-black/20 sm:h-8 sm:w-8"
+              loading="lazy"
+            />
+          ) : (
+            <span
+              title={MARKET_LABELS[listing.source]}
+              className="inline-flex h-7 items-center rounded-lg bg-black/70 px-1.5 text-[11px] font-bold text-white shadow-md sm:h-8 sm:px-2 sm:text-xs"
+            >
+              {MARKET_LABELS[listing.source]}
+            </span>
+          )}
         </div>
 
+        {/* Copy link — top-right */}
         <div className="absolute right-1.5 top-1.5">
           <button
             type="button"
             onClick={copyLink}
             title="Copiar enlace"
             aria-label="Copiar enlace del anuncio"
-            className="flex h-8 w-8 items-center justify-center rounded-full bg-white/90 text-stone-600 shadow-sm backdrop-blur transition hover:bg-white hover:text-brand-700"
+            className="flex h-8 w-8 items-center justify-center rounded-full bg-black/55 text-texto-1 shadow-sm backdrop-blur transition hover:bg-black/75 hover:text-white"
           >
             {copied ? (
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden>
@@ -116,38 +131,26 @@ export function ListingCard({ listing }: { listing: Listing }) {
           </button>
         </div>
 
-        <div className="absolute bottom-1.5 left-1.5">
-          {SOURCE_LOGO[listing.source] ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={SOURCE_LOGO[listing.source]}
-              alt={MARKET_LABELS[listing.source]}
-              title={MARKET_LABELS[listing.source]}
-              className="h-7 w-7 rounded-lg shadow-md ring-1 ring-black/5 sm:h-8 sm:w-8"
-              loading="lazy"
-            />
-          ) : (
-            <span
-              title={MARKET_LABELS[listing.source]}
-              className="inline-flex h-7 items-center rounded-lg bg-black/70 px-1.5 text-[11px] font-bold text-white shadow-md sm:h-8 sm:px-2 sm:text-xs"
-            >
-              {MARKET_LABELS[listing.source]}
-            </span>
-          )}
+        {/* AI seal (language verdict) — bottom-left (guía §5) */}
+        <div className="absolute bottom-1.5 left-1.5 right-1.5">
+          <LanguageBadge
+            verdict={listing.languageVerdict}
+            evidence={listing.verdictEvidence}
+          />
         </div>
       </div>
 
-      <div className="flex flex-1 flex-col gap-1 p-2 sm:gap-2 sm:p-3">
-        <h3 className="clamp-2 text-xs font-medium leading-snug text-stone-800 sm:text-sm">
+      <div className="flex flex-1 flex-col gap-1.5 p-2 sm:gap-2 sm:p-3">
+        <h3 className="clamp-2 text-xs font-bold leading-snug text-texto-1 sm:text-sm">
           {listing.title}
         </h3>
 
         <div className="mt-auto flex items-end justify-between gap-1">
           <div className="min-w-0">
-            <div className="text-base font-bold text-stone-900 sm:text-lg">
+            <div className="font-display text-xl leading-none text-white sm:text-2xl">
               {formatPrice(total, listing.currency)}
             </div>
-            <div className="truncate text-[11px] text-stone-500 sm:text-xs">
+            <div className="mt-1 truncate font-mono text-[10px] text-texto-3 sm:text-[11px]">
               {formatPrice(listing.price, listing.currency)}
               {listing.shippingPrice != null
                 ? ` + ${formatPrice(listing.shippingPrice, listing.currency)} envío`

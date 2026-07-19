@@ -3,7 +3,19 @@
 @tailwind utilities;
 
 :root {
-  color-scheme: light;
+  color-scheme: dark;
+
+  /* Tokens de marca (referencia; ver assets/tokens.css) */
+  --rojo: #e63946;
+  --gualda: #f5c518;
+  --blanco: #f5f5f5;
+  --carbon: #0e0e10;
+  --panel: #161619;
+  --borde: #26262b;
+  --borde-fuerte: #3a3a42;
+  --texto-1: #ececed;
+  --texto-2: #a9a9b0;
+  --texto-3: #77777e;
 }
 
 html,
@@ -14,12 +26,19 @@ body {
 
 body {
   background:
-    radial-gradient(1200px 600px at 50% -10%, #fff1e0 0%, transparent 60%),
-    #fafaf9;
-  color: #1c1917;
-  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
-    "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+    radial-gradient(1100px 560px at 50% -8%, rgba(230, 57, 70, 0.12) 0%, transparent 62%),
+    var(--carbon);
+  color: var(--texto-1);
+  font-family: var(--font-ui), system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
+  min-height: 100vh;
+}
+
+/* Tipografía display para el logotipo y números grandes */
+.font-display {
+  font-family: var(--font-display), sans-serif;
+  letter-spacing: 0.01em;
 }
 
 /* Line clamp helper for card titles (no plugin needed) */
@@ -40,9 +59,20 @@ body {
   display: none;
 }
 
-/* Respect users who prefer reduced motion for the "Analizando…" pulse */
+/* Autofill: keep dark inputs dark instead of the browser's white/yellow fill */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus {
+  -webkit-text-fill-color: var(--texto-1);
+  -webkit-box-shadow: 0 0 0px 1000px var(--carbon) inset;
+  caret-color: var(--texto-1);
+  transition: background-color 5000s ease-in-out 0s;
+}
+
+/* Respect users who prefer reduced motion for the pulse/spin */
 @media (prefers-reduced-motion: reduce) {
-  .animate-pulseSoft {
+  .animate-pulseSoft,
+  .animate-spinPulse {
     animation: none;
   }
 }

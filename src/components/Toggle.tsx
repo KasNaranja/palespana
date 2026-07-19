@@ -24,7 +24,7 @@ export function Toggle({
         onClick={() => onChange(!checked)}
         className={[
           "relative inline-flex h-7 w-12 items-center rounded-full transition",
-          checked ? "bg-verdict-es" : "bg-stone-300",
+          checked ? "bg-verdict-es" : "bg-borde-fuerte",
         ].join(" ")}
       >
         <span
@@ -34,7 +34,7 @@ export function Toggle({
           ].join(" ")}
         />
       </button>
-      <span className="text-sm font-semibold text-stone-800">{label}</span>
+      <span className="text-sm font-semibold text-texto-1">{label}</span>
     </label>
   );
 }

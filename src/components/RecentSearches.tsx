@@ -20,13 +20,13 @@ export function RecentSearches({
   return (
     <div className="mt-8">
       <div className="mb-2 flex items-center justify-between">
-        <h2 className="text-sm font-semibold text-stone-500">
+        <h2 className="text-sm font-semibold text-texto-2">
           Búsquedas recientes
         </h2>
         <button
           type="button"
           onClick={onClear}
-          className="text-xs text-stone-400 hover:text-stone-600"
+          className="text-xs text-texto-3 hover:text-texto-1"
         >
           Borrar
         </button>
@@ -37,14 +37,14 @@ export function RecentSearches({
             key={`${r.query}-${i}`}
             type="button"
             onClick={() => onPick(r)}
-            className="group inline-flex items-center gap-1.5 rounded-full border border-stone-200 bg-white px-3 py-2 text-sm text-stone-700 transition hover:border-brand-300 hover:text-brand-700 min-h-[40px]"
+            className="group inline-flex items-center gap-1.5 rounded-full border border-borde-fuerte bg-carbon px-3 py-2 text-sm text-texto-2 transition hover:border-brand-500/60 hover:text-texto-1 min-h-[40px]"
           >
             <svg
               width="14"
               height="14"
               viewBox="0 0 24 24"
               fill="none"
-              className="text-stone-400 group-hover:text-brand-500"
+              className="text-texto-3 group-hover:text-brand-500"
               aria-hidden
             >
               <path
@@ -56,7 +56,7 @@ export function RecentSearches({
             </svg>
             <span className="font-medium">{r.query}</span>
             {r.console !== "todas" && (
-              <span className="text-xs text-stone-400">
+              <span className="text-xs text-texto-3">
                 · {consoleLabel(r.console)}
               </span>
             )}

@@ -1,0 +1,44 @@
+:root {
+  /* Marca */
+  --rojo: #E63946;
+  --gualda: #F5C518;
+  --gualda-dark: #D4A017;
+
+  /* Neutros */
+  --blanco: #F5F5F5;
+  --carbon: #0E0E10;
+  --panel: #161619;
+  --borde: #26262B;
+  --borde-fuerte: #3A3A42;
+  --texto-1: #ECECED;
+  --texto-2: #A9A9B0;
+  --texto-3: #77777E;
+
+  /* Estados de idioma (3 estados) */
+  --es-text: #7ED0AA;   --es-bg: #16231C;   --es-border: #2F4A3A;   /* Edición española */
+  --multi-text: #8AB4F8; --multi-bg: #172033; --multi-border: #2E415F; /* Jugable en español */
+  --other-text: #F19AA2; --other-bg: #2A181B; --other-border: #4A2830;  /* Otro idioma */
+  --warn-text: #E8C65A;  --warn-bg: #262218;  --warn-border: #4A4020;   /* No concluyente */
+  --pend-text: #A9A9B0;  --pend-bg: #1C1C21;  --pend-border: #2E2E35;   /* Analizando */
+
+  /* Fuentes de datos (acento; el origen se muestra con su LOGO real) */
+  --src-vinted: #09B1BA;
+  --src-wallapop: #13C1AC;
+  --src-ebay: #E53238;
+
+  /* Tipografía */
+  --font-display: 'Anton', sans-serif;
+  --font-ui: 'Archivo', system-ui, sans-serif;
+  --font-mono: 'IBM Plex Mono', monospace;
+
+  /* Radios */
+  --r-badge: 8px;
+  --r-input: 14px;
+  --r-card: 16px;
+  --r-pill: 999px;
+
+  /* Alturas */
+  --h-input: 52px;
+  --h-cta: 48px;
+  --h-chip: 34px;
+}

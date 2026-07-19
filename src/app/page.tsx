@@ -10,6 +10,7 @@ import { Toggle } from "@/components/Toggle";
 import { SortDropdown, type SortKey } from "@/components/SortDropdown";
 import { Results } from "@/components/Results";
 import { DemoBanner, EmptyState, ErrorState } from "@/components/States";
+import { Mirilla } from "@/components/Mirilla";
 import { getStatus, postSearch, CazaApiError } from "@/lib/api";
 import { useRecentSearches } from "@/lib/useRecentSearches";
 import { MARKET_LABELS, MARKET_SOURCES } from "@/lib/types";
@@ -130,8 +131,8 @@ export default function Home() {
     <main className="mx-auto min-h-screen w-full max-w-6xl px-4 pb-24">
       {!showResults ? (
         <section className="mx-auto max-w-2xl pt-8 sm:pt-14">
-          {/* Brand logo on a dark card so the white "PAL" shows clearly. */}
-          <div className="mx-auto flex max-w-xs items-center justify-center rounded-3xl bg-stone-900 px-6 py-6 shadow-sm">
+          {/* Brand logo on a dark panel so the white "PAL" shows clearly. */}
+          <div className="mx-auto flex max-w-xs items-center justify-center rounded-3xl border border-borde bg-panel px-6 py-6">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src="/brand/palespana-logo.png"
@@ -139,7 +140,7 @@ export default function Home() {
               className="h-40 w-auto sm:h-48"
             />
           </div>
-          <p className="mx-auto mt-5 max-w-lg text-center text-stone-500">
+          <p className="mx-auto mt-5 max-w-lg text-center text-texto-2">
             Buscamos en Vinted, Wallapop y eBay y analizamos las fotos con IA para enseñarte solo
             las copias en castellano, de la más barata a la más cara.
           </p>
@@ -189,7 +190,13 @@ export default function Home() {
               <ErrorState message={search.error.message} onRetry={retry} />
             </div>
           ) : search.isPending ? (
-            <SkeletonGrid />
+            <div>
+              <div className="flex items-center justify-center gap-3 py-6 text-texto-2">
+                <Mirilla size={30} spinning />
+                <span className="text-sm">Rastreando Vinted, Wallapop y eBay…</span>
+              </div>
+              <SkeletonGrid />
+            </div>
           ) : active ? (
             <>
               {active.demo && (
@@ -201,7 +208,7 @@ export default function Home() {
               {total === 0 ? (
                 <div className="pt-10">
                   <EmptyState title="No hay anuncios de ese juego ahora mismo en Vinted, Wallapop ni eBay">
-                    <p className="text-sm text-stone-500">
+                    <p className="text-sm text-texto-3">
                       Prueba con otro título o revisa la ortografía.
                     </p>
                   </EmptyState>
@@ -209,7 +216,7 @@ export default function Home() {
               ) : (
                 <>
                   {/* Sticky controls */}
-                  <div className="sticky top-0 z-20 -mx-4 border-b border-stone-200 bg-stone-50/95 px-4 py-3 backdrop-blur">
+                  <div className="sticky top-0 z-20 -mx-4 border-b border-borde bg-carbon/95 px-4 py-3 backdrop-blur">
                     <div className="space-y-2">
                       {MARKET_SOURCES.map((src) => {
                         const sp = sourceProgress(src);
@@ -261,12 +268,12 @@ function SkeletonGrid() {
       {Array.from({ length: 8 }).map((_, i) => (
         <div
           key={i}
-          className="overflow-hidden rounded-2xl border border-stone-200 bg-white"
+          className="overflow-hidden rounded-card border border-borde bg-panel"
         >
-          <div className="aspect-[3/4] w-full animate-pulseSoft bg-stone-100" />
+          <div className="aspect-[3/4] w-full animate-pulseSoft bg-carbon" />
           <div className="space-y-2 p-3">
-            <div className="h-4 w-4/5 animate-pulseSoft rounded bg-stone-100" />
-            <div className="h-4 w-2/5 animate-pulseSoft rounded bg-stone-100" />
+            <div className="h-4 w-4/5 animate-pulseSoft rounded bg-panel2" />
+            <div className="h-4 w-2/5 animate-pulseSoft rounded bg-panel2" />
           </div>
         </div>
       ))}
@@ -279,7 +286,7 @@ function Footer() {
   // logos read. Both link to the home page for now.
   return (
     <nav
-      className="fixed inset-x-0 bottom-0 z-40 border-t border-black/20 bg-stone-900"
+      className="fixed inset-x-0 bottom-0 z-40 border-t border-borde bg-panel"
       aria-label="Navegación"
     >
       <div className="mx-auto flex max-w-md items-stretch justify-around">

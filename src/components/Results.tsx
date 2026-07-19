@@ -96,7 +96,7 @@ export function Results({
               Ver no concluyentes ({inconclusiveCount})
             </button>
           ) : (
-            <p className="text-sm text-stone-500">
+            <p className="text-sm text-texto-3">
               Prueba a desactivar “Solo en español” para ver el resto.
             </p>
           )}
@@ -106,14 +106,14 @@ export function Results({
       )}
 
       {inconclusiveCount > 0 && (
-        <div className="rounded-2xl border border-stone-200 bg-stone-50/60">
+        <div className="rounded-card border border-borde bg-panel/60">
           <button
             type="button"
             onClick={() => setExpandInconclusive((v) => !v)}
             aria-expanded={expandInconclusive}
             className="flex w-full items-center justify-between px-4 py-3 text-left"
           >
-            <span className="font-semibold text-stone-700">
+            <span className="font-semibold text-texto-1">
               No concluyentes ({inconclusiveCount})
             </span>
             <svg
@@ -122,7 +122,7 @@ export function Results({
               viewBox="0 0 24 24"
               fill="none"
               className={[
-                "text-stone-400 transition",
+                "text-texto-3 transition",
                 expandInconclusive ? "rotate-180" : "",
               ].join(" ")}
               aria-hidden
@@ -137,7 +137,7 @@ export function Results({
             </svg>
           </button>
           {expandInconclusive && (
-            <div className="border-t border-stone-200 p-4">
+            <div className="border-t border-borde p-4">
               <Grid listings={groups.inconclusive} />
             </div>
           )}
