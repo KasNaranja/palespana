@@ -210,6 +210,31 @@ export function platformMatchesConsole(
   return detected === sel;
 }
 
+/**
+ * True when the TITLE explicitly names the selected strict console. The seller
+ * stating the platform is authoritative, so the AI's cover reading must NOT
+ * override it — the AI gate (platformMatchesConsole) only applies to listings
+ * whose title is ambiguous (just the game name). Non-strict chips → false.
+ */
+export function titleNamesConsole(title: string, sel: ConsoleKey): boolean {
+  if (!STRICT_CONSOLES.has(sel)) return false;
+  const re = PLATFORM_PATTERNS[sel];
+  return !!re && re.test(normalize(title));
+}
+
+/**
+ * Final keep/hide decision for the console chip, combining both signals:
+ * keep if the TITLE confirms the console, OR the AI didn't confidently read a
+ * different one. Only ambiguous-title copies can be hidden by the AI.
+ */
+export function consoleKeep(
+  title: string,
+  detected: DetectedPlatform | undefined,
+  sel: ConsoleKey
+): boolean {
+  return titleNamesConsole(title, sel) || platformMatchesConsole(detected, sel);
+}
+
 /** Remove duplicate vintedIds, keeping the first occurrence (Vinted paginates
  *  overlapping pages, so the same id can appear twice). */
 export function dedupe(listings: Listing[]): Listing[] {
