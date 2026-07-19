@@ -17,6 +17,23 @@ export type LanguageVerdict =
   | "inconclusive"
   | "pending";
 
+// Console/platform detected by the vision AI from the box art, used to hide
+// wrong-platform copies (e.g. a PS3 disc shown when the PS4 chip is selected)
+// that the title-based filter can't catch. "other" = some platform outside the
+// selectable chips (PSP, Vita, Wii, retro…). "unknown" = couldn't tell → never
+// hidden on uncertainty.
+export type DetectedPlatform =
+  | "ps1"
+  | "ps2"
+  | "ps3"
+  | "ps4"
+  | "ps5"
+  | "switch"
+  | "xbox"
+  | "pc"
+  | "other"
+  | "unknown";
+
 // Marketplaces CazaPAL searches. Each listing carries its source so the UI can
 // show two independent progress bars and tag every card.
 export type MarketSource = "vinted" | "wallapop" | "ebay";
@@ -72,6 +89,7 @@ export interface Listing {
   sellerCountry: string | null; // ISO-2 code, e.g. "ES", "FR"
   languageVerdict: LanguageVerdict;
   verdictEvidence: string | null; // one sentence in Spanish
+  detectedPlatform?: DetectedPlatform; // console read from the box art by the AI
   analyzedAt: string | null; // ISO timestamp
 }
 
@@ -122,6 +140,7 @@ export interface StatusResponse {
 export interface VisionResult {
   verdict: "es" | "es_multi" | "other" | "inconclusive";
   evidence: string;
+  platform: DetectedPlatform;
 }
 
 export interface ApiError {

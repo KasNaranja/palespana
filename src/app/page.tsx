@@ -13,6 +13,7 @@ import { DemoBanner, EmptyState, ErrorState } from "@/components/States";
 import { Mirilla } from "@/components/Mirilla";
 import { getStatus, postSearch, CazaApiError } from "@/lib/api";
 import { useRecentSearches } from "@/lib/useRecentSearches";
+import { platformMatchesConsole } from "@/lib/filter";
 import { MARKET_LABELS, MARKET_SOURCES } from "@/lib/types";
 import type {
   ConsoleKey,
@@ -26,6 +27,7 @@ import type {
 interface ActiveSearch {
   id: string;
   query: string;
+  console: ConsoleKey;
   demo: boolean;
   demoReason: string | null;
   initial: Listing[];
@@ -53,6 +55,7 @@ export default function Home() {
         setActive({
           id: data.search.id,
           query: data.search.query,
+          console: data.search.console,
           demo: data.search.demo,
           demoReason: data.demoReason ?? null,
           initial: data.listings,
@@ -114,7 +117,13 @@ export default function Home() {
     return () => window.removeEventListener("keydown", onKey);
   }, [active]);
 
-  const listings = status.data?.listings ?? active?.initial ?? [];
+  // Base listings from the live poll (or the initial payload before the first
+  // poll). Then hide copies the AI read as a DIFFERENT console than the one the
+  // search ran with (e.g. a PS3 disc titled just "The Evil Within"). Uncertain /
+  // not-yet-analyzed listings are kept (platformMatchesConsole returns true).
+  const listings = (status.data?.listings ?? active?.initial ?? []).filter((l) =>
+    platformMatchesConsole(l.detectedPlatform, active?.console ?? "todas")
+  );
   const total = active?.total ?? 0;
   const showResults = !!active || search.isPending;
 

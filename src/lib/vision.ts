@@ -9,7 +9,7 @@
 // ─────────────────────────────────────────────────────────────
 
 import { config, COST_GUARD } from "./config";
-import type { VisionResult } from "./types";
+import type { DetectedPlatform, VisionResult } from "./types";
 
 const SYSTEM_PROMPT = `Eres un experto en videojuegos físicos del mercado europeo (PAL) e identificas, a partir de las fotos de la carátula y la contraportada, si una copia está en español y de qué forma.
 
@@ -40,9 +40,35 @@ REGLAS CLAVE:
 - Busca activamente la fila de idiomas: suele ser una línea tipo "EN / FR / IT / DE / ES / PT" cerca de los iconos de jugadores/tamaño. Si ves "ES" ahí y el resto de la caja es de otro idioma → "es_multi".
 - Ante duda entre "es" y "es_multi", elige "es_multi". Ante duda de si hay español o no, y no lo ves claro → "other" o "inconclusive"; no inventes.
 
+DETECCIÓN DE PLATAFORMA (campo "platform") — identifica la CONSOLA de la caja por su diseño/logos, con independencia del idioma:
+- "ps4" = funda AZUL de PlayStation 4 (banda superior azul con "PlayStation 4").
+- "ps5" = funda BLANCA de PlayStation 5 (banda superior blanca con "PlayStation 5").
+- "ps3" = PlayStation 3 (logo/banda "PlayStation 3", carátula negra clásica de PS3).
+- "ps2" = PlayStation 2 (caja negra clásica "PlayStation 2").
+- "ps1" = PlayStation original / PSone ("PlayStation", caja gris/negra).
+- "switch" = funda ROJA de Nintendo Switch (logo "Nintendo Switch").
+- "xbox" = Xbox (One / Series X|S / 360), banda verde o negra "XBOX".
+- "pc" = caja/funda de PC (PC DVD-ROM, Windows).
+- "other" = cualquier otra plataforma (PSP, PS Vita, Wii, Wii U, DS/3DS, Game Boy, Mega Drive, SNES, N64, Dreamcast…).
+- "unknown" = no se distingue la plataforma con seguridad.
+Usa "unknown" si dudas; NO adivines la plataforma. La plataforma es INDEPENDIENTE del idioma (un juego PS4 puede estar en cualquier idioma).
+
 El campo "evidence" debe ser UNA sola frase en español citando la evidencia concreta vista (qué palabras, en qué idioma, y si viste "ES" en la lista de idiomas).`;
 
-const USER_PROMPT = `Analiza estas fotos de una copia de un videojuego a la venta. ¿Está en español?`;
+const USER_PROMPT = `Analiza estas fotos de una copia de un videojuego a la venta. ¿Está en español? ¿De qué consola/plataforma es la caja?`;
+
+const PLATFORMS = [
+  "ps1",
+  "ps2",
+  "ps3",
+  "ps4",
+  "ps5",
+  "switch",
+  "xbox",
+  "pc",
+  "other",
+  "unknown",
+] as const;
 
 const RESPONSE_SCHEMA = {
   type: "object",
@@ -52,8 +78,9 @@ const RESPONSE_SCHEMA = {
       enum: ["es", "es_multi", "other", "inconclusive"],
     },
     evidence: { type: "string" },
+    platform: { type: "string", enum: [...PLATFORMS] },
   },
-  required: ["verdict", "evidence"],
+  required: ["verdict", "evidence", "platform"],
 };
 
 const MAX_BYTES = 5 * 1024 * 1024; // keep well under Gemini limits
@@ -148,7 +175,13 @@ function parseVerdict(text: string): VisionResult | null {
           : v === "other"
             ? "La copia está en otro idioma según las fotos."
             : "No hay evidencia suficiente para confirmar el idioma.";
-  return { verdict: v, evidence };
+  const rawP = obj?.platform;
+  const platform: DetectedPlatform = (PLATFORMS as readonly string[]).includes(
+    rawP
+  )
+    ? rawP
+    : "unknown";
+  return { verdict: v, evidence, platform };
 }
 
 /**
@@ -254,6 +287,7 @@ export async function analyzeImages(imageUrls: string[]): Promise<VisionResult> 
     return {
       verdict: "inconclusive",
       evidence: "El análisis no devolvió un resultado claro sobre el idioma.",
+      platform: "unknown",
     };
   }
   return parsed;

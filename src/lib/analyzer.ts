@@ -104,7 +104,9 @@ async function analyzeOneLive(
       listing.vintedId,
       result.verdict,
       result.evidence,
-      nowIso()
+      nowIso(),
+      true,
+      result.platform
     );
   } catch (e) {
     // Transient failure (rate limit, overload, image download): do NOT persist,
@@ -195,7 +197,9 @@ export async function startAnalysis(searchId: string): Promise<void> {
           l.vintedId,
           c.verdict as LanguageVerdict,
           c.evidence,
-          c.analyzedAt
+          c.analyzedAt,
+          true,
+          c.platform ?? "unknown"
         );
       } else {
         pending.push(l);

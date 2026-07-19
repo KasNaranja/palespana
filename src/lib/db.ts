@@ -14,6 +14,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { config } from "./config";
 import type {
+  DetectedPlatform,
   Listing,
   LanguageVerdict,
   MarketSource,
@@ -24,6 +25,7 @@ interface CacheEntry {
   verdict: LanguageVerdict;
   evidence: string | null;
   analyzedAt: string;
+  platform?: DetectedPlatform;
 }
 
 function resolveFile(): string {
@@ -109,6 +111,7 @@ export interface CachedVerdict {
   verdict: LanguageVerdict;
   evidence: string | null;
   analyzedAt: string;
+  platform?: DetectedPlatform;
 }
 
 /** Cache key namespaced by source so ids that collide across marketplaces never
@@ -168,11 +171,12 @@ export function setCachedVerdict(
   vintedId: string,
   verdict: LanguageVerdict,
   evidence: string | null,
-  analyzedAt: string
+  analyzedAt: string,
+  platform: DetectedPlatform = "unknown"
 ): void {
   if (!config.cacheEnabled) return; // nothing is stored
   const ck = cacheKey(source, vintedId);
-  const entry: CacheEntry = { verdict, evidence, analyzedAt };
+  const entry: CacheEntry = { verdict, evidence, analyzedAt, platform };
   _cache[ck] = entry; // L1
   if (redisEnabled) {
     // Fire-and-forget persistent write; never blocks analysis.
@@ -235,7 +239,8 @@ export function updateListingVerdict(
   verdict: LanguageVerdict,
   evidence: string | null,
   analyzedAt: string,
-  persist = true
+  persist = true,
+  platform: DetectedPlatform = "unknown"
 ): void {
   const rec = searches.get(searchId);
   if (rec) {
@@ -245,11 +250,12 @@ export function updateListingVerdict(
     if (l) {
       l.languageVerdict = verdict;
       l.verdictEvidence = evidence;
+      l.detectedPlatform = platform;
       l.analyzedAt = analyzedAt;
     }
   }
   if (verdict !== "pending" && persist) {
-    setCachedVerdict(source, vintedId, verdict, evidence, analyzedAt);
+    setCachedVerdict(source, vintedId, verdict, evidence, analyzedAt, platform);
   }
 }
 

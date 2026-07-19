@@ -2,7 +2,7 @@
 // Deduplication + relevance filtering for raw Vinted results.
 // ─────────────────────────────────────────────────────────────
 
-import type { ConsoleKey, Listing } from "./types";
+import type { ConsoleKey, DetectedPlatform, Listing } from "./types";
 
 function normalize(s: string): string {
   let t = s
@@ -191,6 +191,23 @@ function consoleAllows(title: string, sel: ConsoleKey): boolean {
     if (re.test(norm)) return false;
   }
   return true; // no platform named → ambiguous → keep
+}
+
+/**
+ * Client-side platform gate using the console the AI read off the box art
+ * (`Listing.detectedPlatform`). Complements the title-based `consoleAllows`:
+ * it catches wrong-platform copies whose TITLE is just the game name. Same
+ * safety rule — only hide on a CONFIDENT mismatch; keep on "unknown"/undefined.
+ */
+export function platformMatchesConsole(
+  detected: DetectedPlatform | undefined,
+  sel: ConsoleKey
+): boolean {
+  if (!STRICT_CONSOLES.has(sel)) return true; // broad/catch-all chip → no filter
+  if (!detected || detected === "unknown") return true; // uncertain → never hide
+  // ps1-5/switch/xbox map 1:1 to the chip; "pc"/"other" never equal a strict
+  // console, so a detected pc/other/handheld is hidden when a console is chosen.
+  return detected === sel;
 }
 
 /** Remove duplicate vintedIds, keeping the first occurrence (Vinted paginates
