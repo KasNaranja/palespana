@@ -19,6 +19,12 @@ const SOURCE_LOGO: Partial<Record<MarketSource, string>> = {
   ebay: "/logo/ebay.webp",
 };
 
+// Logos that are transparent inside (eBay's "ebay" wordmark in a ring) vanish on
+// the dark card — give those a white plate + a little padding so they read.
+const LOGO_PLATE: Partial<Record<MarketSource, string>> = {
+  ebay: "bg-white p-0.5",
+};
+
 export function ListingCard({ listing }: { listing: Listing }) {
   const [copied, setCopied] = useState(false);
   const total = totalPrice(listing);
@@ -77,7 +83,10 @@ export function ListingCard({ listing }: { listing: Listing }) {
               src={SOURCE_LOGO[listing.source]}
               alt={MARKET_LABELS[listing.source]}
               title={MARKET_LABELS[listing.source]}
-              className="h-7 w-7 rounded-lg shadow-md ring-1 ring-black/20 sm:h-8 sm:w-8"
+              className={[
+                "h-7 w-7 rounded-lg object-contain shadow-md ring-1 ring-black/20 sm:h-8 sm:w-8",
+                LOGO_PLATE[listing.source] ?? "",
+              ].join(" ")}
               loading="lazy"
             />
           ) : (
