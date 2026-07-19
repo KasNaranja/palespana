@@ -16,7 +16,7 @@ import {
 const SOURCE_LOGO: Partial<Record<MarketSource, string>> = {
   vinted: "/logo/vinted.png",
   wallapop: "/logo/wallapop.webp",
-  // ebay: add "/logo/ebay.png" once provided; falls back to a text pill for now.
+  ebay: "/logo/ebay.webp",
 };
 
 export function ListingCard({ listing }: { listing: Listing }) {
