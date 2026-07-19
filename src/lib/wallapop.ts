@@ -12,6 +12,7 @@
 // ─────────────────────────────────────────────────────────────
 
 import { config } from "./config";
+import { isRelevant } from "./filter";
 import type { ConsoleKey, Listing } from "./types";
 
 export type WallapopErrorKind = "blocked" | "rate_limited" | "unavailable";
@@ -109,30 +110,33 @@ function extractItems(data: any): any[] {
   );
 }
 
-/** Search Wallapop's catalog. Returns raw (un-deduped, un-filtered) listings. */
-export async function searchListings(
-  query: string,
-  consoleKey: ConsoleKey,
-  perPage: number
-): Promise<Listing[]> {
+const SEARCH_HEADERS = {
+  "User-Agent": UA,
+  Accept: "application/json, text/plain, */*",
+  "Accept-Language": "es-ES,es;q=0.9",
+  "X-DeviceOS": "0",
+  Origin: "https://es.wallapop.com",
+  Referer: "https://es.wallapop.com/",
+};
+
+/** Fetch ONE page of Wallapop results + the opaque token for the next page.
+ *  Pagination uses that `next_page` token (an `offset` param is ignored). */
+async function fetchPage(
+  keywords: string,
+  nextToken?: string
+): Promise<{ items: any[]; next?: string }> {
   const params = new URLSearchParams();
-  params.set("keywords", wallapopKeywords(query, consoleKey));
+  params.set("keywords", keywords);
   params.set("source", "search_box");
   // A location is required; default to the centre of Spain (national reach).
   params.set("latitude", config.wallapopLat);
   params.set("longitude", config.wallapopLng);
+  if (nextToken) params.set("next_page", nextToken);
 
   let res: Response;
   try {
     res = await fetch(`${SEARCH_URL}?${params.toString()}`, {
-      headers: {
-        "User-Agent": UA,
-        Accept: "application/json, text/plain, */*",
-        "Accept-Language": "es-ES,es;q=0.9",
-        "X-DeviceOS": "0",
-        Origin: "https://es.wallapop.com",
-        Referer: "https://es.wallapop.com/",
-      },
+      headers: SEARCH_HEADERS,
     });
   } catch (e) {
     throw new WallapopError(
@@ -158,9 +162,41 @@ export async function searchListings(
     throw new WallapopError("unavailable", "Respuesta de Wallapop no era JSON.");
   }
 
-  const items = extractItems(data);
-  return items
-    .map(itemToListing)
-    .filter((l): l is Listing => l !== null)
-    .slice(0, perPage);
+  const next =
+    typeof data?.meta?.next_page === "string" ? data.meta.next_page : undefined;
+  return { items: extractItems(data), next };
+}
+
+/**
+ * Search Wallapop, following the `next_page` token until we have enough RELEVANT
+ * matches or run out of pages. Wallapop's keyword search is noisy — "the evil
+ * within" floods page 1 with Resident Evil, so the actual matches sit on later
+ * pages; a single page would miss them (and slicing the raw page before
+ * filtering dropped even the ones we DID fetch). Returns ALL raw items; the
+ * caller de-dupes, relevance/console-filters, then caps for analysis.
+ */
+export async function searchListings(
+  query: string,
+  consoleKey: ConsoleKey,
+  target: number
+): Promise<Listing[]> {
+  const keywords = wallapopKeywords(query, consoleKey);
+  const MAX_PAGES = 3; // ≈120 raw items; enough depth to dig matches out of noise
+  const all: Listing[] = [];
+  let nextToken: string | undefined;
+
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const { items, next } = await fetchPage(keywords, nextToken);
+    for (const it of items) {
+      const l = itemToListing(it);
+      if (l) all.push(l);
+    }
+    // Stop once we already hold enough relevant matches (popular games fill on
+    // page 1); keep paging for noisy/sparse ones until MAX_PAGES or no more.
+    const relevant = all.filter((l) => isRelevant(l, query)).length;
+    if (!next || relevant >= target) break;
+    nextToken = next;
+  }
+
+  return all;
 }

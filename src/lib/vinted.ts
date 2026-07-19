@@ -250,7 +250,9 @@ export async function searchListings(
   // PS4 copies titled just "Under the Waves" (Vinted knows their platform from
   // its category; we don't, so we keep ambiguous titles rather than lose them).
   params.set("search_text", query);
-  params.set("per_page", String(perPage));
+  // Fetch a POOL larger than we'll analyze (capped at Vinted's max ~96) so noisy
+  // queries still surface the real matches before the relevance filter + cap.
+  params.set("per_page", String(Math.min(Math.max(perPage, 96), 96)));
   // "relevance" (Vinted's own match ranking) surfaces the copies that actually
   // match the game, including older listings. "newest_first" only returned the
   // most recently uploaded ones, burying older matches beyond our fetch window
