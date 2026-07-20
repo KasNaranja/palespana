@@ -135,10 +135,36 @@ let rrIndex = 0;
 function throttleKey(ks: KeyState): Promise<void> {
   ks.chain = ks.chain.then(async () => {
     const wait = config.geminiMinIntervalMs - (Date.now() - ks.lastCallAt);
-    if (wait > 0) await sleep(wait);
+    if (wait > 0) {
+      stats.totalWaitMs += wait;
+      await sleep(wait);
+    }
     ks.lastCallAt = Date.now();
   });
   return ks.chain;
+}
+
+// ── Instrumentación (diagnóstico de rendimiento) ───────────────
+// Contadores en memoria para ver DÓNDE se va el tiempo: si esperamos por el
+// throttle, si Gemini nos limita (429 por minuto / por día) o si las llamadas
+// simplemente tardan. Se reinician al redesplegar. No exponen ninguna clave.
+const stats = {
+  calls: 0, // intentos de llamada
+  ok: 0, // respuestas correctas
+  r429min: 0, // 429 por minuto (transitorio)
+  r429day: 0, // 429 por cuota diaria
+  r503: 0, // modelo saturado
+  totalCallMs: 0, // suma de duración de llamadas OK
+  totalWaitMs: 0, // suma de espera por throttle
+};
+
+export function getVisionStats() {
+  return {
+    ...stats,
+    avgCallMs: stats.ok ? Math.round(stats.totalCallMs / stats.ok) : 0,
+    avgWaitMs: stats.calls ? Math.round(stats.totalWaitMs / stats.calls) : 0,
+    minIntervalMs: config.geminiMinIntervalMs,
+  };
 }
 
 /** Diagnóstico: cuántas claves hay y cuántas están aparcadas ahora mismo por
@@ -260,6 +286,8 @@ export async function analyzeImages(imageUrls: string[]): Promise<VisionResult> 
     }
     tried.add(ks.key);
     await throttleKey(ks);
+    const startedAt = Date.now();
+    stats.calls++;
     const r = await fetch(url, {
       method: "POST",
       headers: {
@@ -268,6 +296,10 @@ export async function analyzeImages(imageUrls: string[]): Promise<VisionResult> 
       },
       body: JSON.stringify(body),
     });
+    if (r.ok) {
+      stats.ok++;
+      stats.totalCallMs += Date.now() - startedAt;
+    }
     if (r.status === 429) {
       const detail = await r.text().catch(() => "");
       // Gemini responde RESOURCE_EXHAUSTED tanto para el límite POR MINUTO como
@@ -277,8 +309,10 @@ export async function analyzeImages(imageUrls: string[]): Promise<VisionResult> 
       // (si se aparcaba, con varias claves en paralelo se aparcaban casi todas
       // y el rendimiento caía al de 1 sola clave).
       if (/per\s*day/i.test(detail)) {
+        stats.r429day++;
         ks.parkedUntil = Date.now() + 30 * 60 * 1000; // cuota diaria agotada
       } else {
+        stats.r429min++;
         // Límite POR MINUTO (ojo: es por PROYECTO, así que varias claves del
         // mismo proyecto se pisan). Pausa corta para que la ventana se recupere:
         // sin ella el motor reintenta en bucle contra claves limitadas y el
@@ -287,7 +321,10 @@ export async function analyzeImages(imageUrls: string[]): Promise<VisionResult> 
       }
       continue; // move to another key
     }
-    if (r.status === 503) continue; // overloaded → another key
+    if (r.status === 503) {
+      stats.r503++;
+      continue; // overloaded → another key
+    }
     res = r;
     break;
   }

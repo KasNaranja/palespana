@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { config, COST_GUARD, isDemoMode } from "@/lib/config";
-import { getKeyStats } from "@/lib/vision";
+import { getKeyStats, getVisionStats } from "@/lib/vision";
 
 export const dynamic = "force-dynamic";
 
@@ -17,6 +17,9 @@ export async function GET() {
     // Si ves muchas aparcadas, es que varias claves comparten proyecto (la cuota
     // de 500/día es POR PROYECTO, no por clave).
     keyStats: getKeyStats(),
+    // Rendimiento: dónde se va el tiempo (espera por throttle vs latencia real)
+    // y si Gemini nos está limitando (429 por minuto / por día).
+    visionStats: getVisionStats(),
     geminiModel: config.geminiModel,
     geminiMinIntervalMs: config.geminiMinIntervalMs,
     demo: isDemoMode(),
