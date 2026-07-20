@@ -225,9 +225,17 @@ export async function startAnalysis(searchId: string): Promise<void> {
       // Run as many listings concurrently as we have Gemini keys, so each key is
       // busy at once (each is throttled independently in vision.ts). One key →
       // the usual 2; three keys → 3 in parallel ≈ 3× throughput.
-      const concurrency = Math.max(
-        COST_GUARD.ANALYSIS_CONCURRENCY,
-        config.geminiKeys.length
+      // MEDIDO en producción: cada llamada a Gemini tarda ~8,6 s y NO recibimos
+      // ningún 429 (ni por minuto ni diario), y la espera del throttle es de
+      // ~0,3 s. Es decir: el cuello de botella NO son las claves ni el ritmo,
+      // sino cuántas llamadas hacemos EN PARALELO. Con C llamadas simultáneas y
+      // ~8,6 s cada una, el ritmo es C/8,6 → con C = nº claves nos quedábamos en
+      // ~1,2 análisis/s desaprovechando las claves. Duplicamos el paralelismo
+      // (tope 16 para no arriesgar la memoria del plan free de Render); el
+      // throttle por clave sigue limitando a ~13 req/min por clave.
+      const concurrency = Math.min(
+        Math.max(COST_GUARD.ANALYSIS_CONCURRENCY, config.geminiKeys.length * 2),
+        16
       );
       await runPool(pending, concurrency, (l) =>
         analyzeOneLive(searchId, l, imagesBudget)
