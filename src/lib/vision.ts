@@ -141,6 +141,18 @@ function throttleKey(ks: KeyState): Promise<void> {
   return ks.chain;
 }
 
+/** Diagnóstico: cuántas claves hay y cuántas están aparcadas ahora mismo por
+ *  haber agotado su cuota diaria. NO expone ninguna clave. */
+export function getKeyStats(): {
+  total: number;
+  parked: number;
+  active: number;
+} {
+  const now = Date.now();
+  const parked = keyStates.filter((k) => k.parkedUntil > now).length;
+  return { total: keyStates.length, parked, active: keyStates.length - parked };
+}
+
 /** Next non-parked, not-yet-tried key (round-robin). Null if none available. */
 function pickKey(tried: Set<string>): KeyState | null {
   const now = Date.now();
