@@ -270,8 +270,14 @@ export async function analyzeImages(imageUrls: string[]): Promise<VisionResult> 
     });
     if (r.status === 429) {
       const detail = await r.text().catch(() => "");
-      if (/per\s*day|resource_exhausted/i.test(detail)) {
-        ks.parkedUntil = Date.now() + 30 * 60 * 1000; // daily quota → park
+      // Gemini responde RESOURCE_EXHAUSTED tanto para el límite POR MINUTO como
+      // para el DIARIO, así que NO se puede usar ese código para decidir. Solo
+      // la cuota DIARIA (métrica "...PerDay...") justifica aparcar la clave 30
+      // min; un 429 por minuto es transitorio y basta con rotar a otra clave
+      // (si se aparcaba, con varias claves en paralelo se aparcaban casi todas
+      // y el rendimiento caía al de 1 sola clave).
+      if (/per\s*day/i.test(detail)) {
+        ks.parkedUntil = Date.now() + 30 * 60 * 1000; // cuota diaria agotada
       }
       continue; // move to another key
     }
