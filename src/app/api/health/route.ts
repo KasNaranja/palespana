@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { config, COST_GUARD, isDemoMode } from "@/lib/config";
 import { getKeyStats, getVisionStats } from "@/lib/vision";
+import { getDatadomeStatus } from "@/lib/vintedCookie";
 
 export const dynamic = "force-dynamic";
 
@@ -23,6 +24,9 @@ export async function GET() {
     geminiModel: config.geminiModel,
     geminiMinIntervalMs: config.geminiMinIntervalMs,
     demo: isDemoMode(),
+    // DataDome cookie health: present? how old? when did it last work?
+    // Only metadata — the value itself is never exposed.
+    vintedCookie: getDatadomeStatus(),
     cacheEnabled: config.cacheEnabled,
     maxListingsPerSource: COST_GUARD.MAX_LISTINGS_PER_SEARCH,
     sources: {

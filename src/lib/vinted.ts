@@ -17,6 +17,7 @@
 // ─────────────────────────────────────────────────────────────
 
 import { config } from "./config";
+import { getDatadomeCookie, markDatadomeOk } from "./vintedCookie";
 import type { ConsoleKey, Listing } from "./types";
 
 export type VintedErrorKind = "blocked" | "rate_limited" | "unavailable";
@@ -40,6 +41,11 @@ const UA =
 let cookieJar = "";
 let cookieFetchedAt = 0;
 const COOKIE_TTL_MS = 10 * 60 * 1000;
+
+// The datadome value used in the LAST bootstrap. When a fresh cookie arrives
+// via /api/vinted-cookie mid-session, this lets us force a re-bootstrap so the
+// new value takes effect immediately instead of waiting for the TTL to lapse.
+let bootstrapDatadome: string | null = null;
 
 function base(): string {
   return `https://${config.vintedHost}`;
@@ -71,18 +77,37 @@ function mergeSetCookies(header: Headers) {
 }
 
 async function bootstrapSession(force = false): Promise<void> {
+  const datadome = getDatadomeCookie();
   const fresh = Date.now() - cookieFetchedAt < COOKIE_TTL_MS;
-  if (cookieJar && fresh && !force) return;
+  // A "fresh" session is still stale if the stored datadome changed since the
+  // last bootstrap (a new cookie just arrived): re-bootstrap with it right away.
+  if (cookieJar && fresh && !force && datadome === bootstrapDatadome) return;
+
+  // The stored datadome changed since the last bootstrap: purge the jar's old
+  // datadome copy (a rotation of the PREVIOUS value) so it cannot shadow the
+  // new one in apiGet. If this response rotates the new value, mergeSetCookies
+  // below re-adds the rotation; otherwise apiGet appends the stored value.
+  if (cookieJar && datadome !== bootstrapDatadome) {
+    cookieJar = cookieJar
+      .split("; ")
+      .filter((kv) => !kv.startsWith("datadome="))
+      .join("; ");
+  }
+
+  // Presenting a valid datadome cookie on the homepage request is what makes
+  // Vinted hand out access_token_web/refresh_token_web (validated empirically;
+  // without it the catalog API answers 401 invalid_authentication_token).
+  const headers: Record<string, string> = {
+    "User-Agent": UA,
+    Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "es-ES,es;q=0.9",
+  };
+  if (datadome) headers.Cookie = `datadome=${datadome}`;
 
   let res: Response;
   try {
     res = await fetch(base() + "/", {
-      headers: {
-        "User-Agent": UA,
-        Accept:
-          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "es-ES,es;q=0.9",
-      },
+      headers,
       redirect: "follow",
     });
   } catch (e) {
@@ -100,6 +125,7 @@ async function bootstrapSession(force = false): Promise<void> {
   }
   mergeSetCookies(res.headers);
   cookieFetchedAt = Date.now();
+  bootstrapDatadome = datadome;
   if (!cookieJar) {
     throw new VintedError(
       "blocked",
@@ -110,6 +136,16 @@ async function bootstrapSession(force = false): Promise<void> {
 
 async function apiGet(pathWithQuery: string, retryOnAuth = true): Promise<any> {
   await bootstrapSession();
+  // Vinted rotates datadome via set-cookie, which mergeSetCookies captures —
+  // in that case the jar's copy is fresher and wins. Only when the jar has no
+  // datadome at all do we append the stored one.
+  let cookieHeader = cookieJar;
+  const datadome = getDatadomeCookie();
+  if (datadome && !/(^|; )datadome=/.test(cookieJar)) {
+    cookieHeader = cookieHeader
+      ? `${cookieHeader}; datadome=${datadome}`
+      : `datadome=${datadome}`;
+  }
   let res: Response;
   try {
     res = await fetch(base() + pathWithQuery, {
@@ -118,7 +154,7 @@ async function apiGet(pathWithQuery: string, retryOnAuth = true): Promise<any> {
         Accept: "application/json, text/plain, */*",
         "Accept-Language": "es-ES,es;q=0.9",
         "X-Requested-With": "XMLHttpRequest",
-        Cookie: cookieJar,
+        Cookie: cookieHeader,
         Referer: base() + "/",
       },
     });
@@ -153,6 +189,7 @@ async function apiGet(pathWithQuery: string, retryOnAuth = true): Promise<any> {
     );
   }
   mergeSetCookies(res.headers);
+  markDatadomeOk();
   try {
     return await res.json();
   } catch {

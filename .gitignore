@@ -8,6 +8,7 @@ dist
 data/*.sqlite
 data/*.sqlite-*
 data/cache.json
+data/vinted-cookie.json
 npm-debug.log*
 .DS_Store
 *.tsbuildinfo

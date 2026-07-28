@@ -1,0 +1,123 @@
+name: vinted-cookie
+
+# Mints a fresh "datadome" cookie by visiting vinted.es with a real (headless)
+# Chromium via Playwright, then POSTs it to the app so its server-side Vinted
+# client can authenticate. The endpoint validates the value against Vinted
+# before accepting it, so sending a stale/invalid cookie is harmless.
+# Free on public repos. GitHub cron can lag a few minutes; that's fine here.
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch: {}
+
+# If two runs overlap, keep only the newest (an older cookie has no value).
+concurrency:
+  group: vinted-cookie
+  cancel-in-progress: true
+
+jobs:
+  mint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Install Playwright (no repo checkout needed)
+        run: |
+          npm init -y
+          npm i playwright
+          npx playwright install --with-deps chromium
+
+      - name: Mint datadome cookie and send it to the app
+        run: |
+          cat > mint.mjs <<'EOF'
+          import { chromium } from 'playwright';
+
+          const APP = 'https://cazapal.onrender.com';
+          const UA =
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
+            '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+          const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+          async function main() {
+            const browser = await chromium.launch({
+              headless: true,
+              args: ['--disable-blink-features=AutomationControlled'],
+            });
+            try {
+              const context = await browser.newContext({
+                locale: 'es-ES',
+                timezoneId: 'Europe/Madrid',
+                viewport: { width: 1280, height: 800 },
+                userAgent: UA,
+              });
+              const page = await context.newPage();
+
+              console.log('Visiting Vinted catalog...');
+              await page.goto('https://www.vinted.es/catalog?search_text=zelda', {
+                waitUntil: 'domcontentloaded',
+                timeout: 45000,
+              });
+
+              // DataDome's JS sets the cookie shortly after load; poll up to 30s.
+              let datadome = null;
+              for (let i = 0; i < 30; i++) {
+                const cookies = await context.cookies();
+                const hit = cookies.find((c) => c.name === 'datadome');
+                if (hit) { datadome = hit.value; break; }
+                await sleep(1000);
+              }
+
+              if (!datadome) {
+                console.error('No datadome cookie after 30s. Page title:', await page.title());
+                return 1;
+              }
+              console.log(`Got datadome cookie (${datadome.length} chars).`);
+
+              // Wake the Render free instance first (it sleeps when idle).
+              let awake = false;
+              for (let i = 1; i <= 4; i++) {
+                try {
+                  const res = await fetch(`${APP}/`);
+                  console.log(`wake ${i} -> HTTP ${res.status}`);
+                  if (res.status === 200) { awake = true; break; }
+                } catch (err) {
+                  console.log(`wake ${i} -> ${err.message}`);
+                }
+                await sleep(15000);
+              }
+              if (!awake) {
+                console.log('Warning: no HTTP 200 from the app; trying to POST anyway.');
+              }
+
+              // Send the cookie. The endpoint validates it against Vinted and may
+              // answer 429 during its cooldown window, so retry a few times.
+              for (let i = 1; i <= 3; i++) {
+                try {
+                  const res = await fetch(`${APP}/api/vinted-cookie`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ datadome }),
+                  });
+                  const body = await res.text();
+                  console.log(`POST attempt ${i} -> HTTP ${res.status}: ${body}`);
+                  if (res.status === 200) {
+                    let ok = false;
+                    try { ok = JSON.parse(body).ok === true; } catch {}
+                    if (ok) return 0;
+                  }
+                } catch (err) {
+                  console.log(`POST attempt ${i} -> ${err.message}`);
+                }
+                if (i < 3) await sleep(10000);
+              }
+              console.error('Cookie was not accepted by the app.');
+              return 1;
+            } finally {
+              // Always close the browser, whatever happened above.
+              await browser.close();
+            }
+          }
+
+          process.exit(await main());
+          EOF
+          node mint.mjs
