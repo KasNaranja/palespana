@@ -156,6 +156,10 @@ const stats = {
   r503: 0, // modelo saturado
   totalCallMs: 0, // suma de duración de llamadas OK
   totalWaitMs: 0, // suma de espera por throttle
+  // Último error NO-429/503 visto (para diagnosticar en /api/health sin logs).
+  // El detalle nunca contiene la clave (viaja en cabecera, no en la URL/cuerpo).
+  lastErrStatus: 0,
+  lastErrDetail: "",
 };
 
 export function getVisionStats() {
@@ -334,6 +338,8 @@ export async function analyzeImages(imageUrls: string[]): Promise<VisionResult> 
   }
   if (!res.ok) {
     const detail = await res.text().catch(() => "");
+    stats.lastErrStatus = res.status;
+    stats.lastErrDetail = detail.slice(0, 220);
     throw new Error(`gemini_http_${res.status}: ${detail.slice(0, 200)}`);
   }
 
