@@ -32,7 +32,10 @@ jobs:
           cat > mint.mjs <<'EOF'
           import { chromium } from 'playwright';
 
-          const APP = 'https://cazapal.onrender.com';
+          // Both URLs during the frankfurt->oregon migration (cazapal->palespana);
+          // success if AT LEAST ONE app accepts the cookie. Once the old service
+          // is gone its URL just fails and is ignored.
+          const APPS = ['https://palespana.onrender.com', 'https://cazapal.onrender.com'];
           const UA =
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
             '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
@@ -73,44 +76,48 @@ jobs:
               }
               console.log(`Got datadome cookie (${datadome.length} chars).`);
 
-              // Wake the Render free instance first (it sleeps when idle).
-              let awake = false;
-              for (let i = 1; i <= 4; i++) {
-                try {
-                  const res = await fetch(`${APP}/`);
-                  console.log(`wake ${i} -> HTTP ${res.status}`);
-                  if (res.status === 200) { awake = true; break; }
-                } catch (err) {
-                  console.log(`wake ${i} -> ${err.message}`);
-                }
-                await sleep(15000);
-              }
-              if (!awake) {
-                console.log('Warning: no HTTP 200 from the app; trying to POST anyway.');
-              }
-
-              // Send the cookie. The endpoint validates it against Vinted and may
-              // answer 429 during its cooldown window, so retry a few times.
-              for (let i = 1; i <= 3; i++) {
-                try {
-                  const res = await fetch(`${APP}/api/vinted-cookie`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ datadome }),
-                  });
-                  const body = await res.text();
-                  console.log(`POST attempt ${i} -> HTTP ${res.status}: ${body}`);
-                  if (res.status === 200) {
-                    let ok = false;
-                    try { ok = JSON.parse(body).ok === true; } catch {}
-                    if (ok) return 0;
+              // Wake + send to each app; success if at least one accepts. The
+              // endpoint validates against Vinted and may answer 429 during its
+              // cooldown window, so retry a few times per app.
+              let accepted = 0;
+              for (const APP of APPS) {
+                let awake = false;
+                for (let i = 1; i <= 4; i++) {
+                  try {
+                    const res = await fetch(`${APP}/`);
+                    console.log(`${APP} wake ${i} -> HTTP ${res.status}`);
+                    if (res.status === 200) { awake = true; break; }
+                  } catch (err) {
+                    console.log(`${APP} wake ${i} -> ${err.message}`);
                   }
-                } catch (err) {
-                  console.log(`POST attempt ${i} -> ${err.message}`);
+                  await sleep(15000);
                 }
-                if (i < 3) await sleep(10000);
+                if (!awake) {
+                  console.log(`${APP}: no HTTP 200; skipping (probably gone or asleep).`);
+                  continue;
+                }
+                for (let i = 1; i <= 3; i++) {
+                  try {
+                    const res = await fetch(`${APP}/api/vinted-cookie`, {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ datadome }),
+                    });
+                    const body = await res.text();
+                    console.log(`${APP} POST ${i} -> HTTP ${res.status}: ${body}`);
+                    if (res.status === 200) {
+                      let ok = false;
+                      try { ok = JSON.parse(body).ok === true; } catch {}
+                      if (ok) { accepted++; break; }
+                    }
+                  } catch (err) {
+                    console.log(`${APP} POST ${i} -> ${err.message}`);
+                  }
+                  if (i < 3) await sleep(10000);
+                }
               }
-              console.error('Cookie was not accepted by the app.');
+              if (accepted > 0) return 0;
+              console.error('Cookie was not accepted by any app.');
               return 1;
             } finally {
               // Always close the browser, whatever happened above.

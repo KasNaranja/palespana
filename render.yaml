@@ -1,12 +1,18 @@
-# Render blueprint for CazaPAL — deploy a free always-on Node server.
-# In Render: New + → "Blueprint" → connect the KasNaranja/CazaPAL repo.
-# The Gemini key is NOT here (sync:false) — set it in the Render dashboard.
+# Render blueprint for PAL España — deploy a free always-on Node server.
+# In Render: New + → "Blueprint" → connect the KasNaranja/palespana repo.
+# The Gemini keys are NOT here (sync:false) — set them in the Render dashboard.
 services:
   - type: web
-    name: cazapal
+    name: palespana
     runtime: node
     plan: free
-    region: frankfurt # closest to Spain
+    # US region ON PURPOSE (was frankfurt): Google's Gemini free tier started
+    # geo-refusing calls from Render's Frankfurt datacenter on 2026-07-28
+    # ("User location is not supported") for every model that still has free
+    # quota (the 3.x family). The US is Google's canonical supported location.
+    # Latency to Vinted/Wallapop is a bit higher from Oregon but irrelevant
+    # next to the seconds-long AI analysis.
+    region: oregon
     buildCommand: npm install && npm run build
     startCommand: npm start
     healthCheckPath: /

@@ -21,11 +21,17 @@ jobs:
     steps:
       - name: Ping app (despierta si estaba dormida)
         run: |
-          URL="https://cazapal.onrender.com/"
-          for i in 1 2 3 4; do
-            code=$(curl -s -m 60 -o /dev/null -w '%{http_code}' "$URL" || echo 000)
-            echo "ping $i -> HTTP $code"
-            if [ "$code" = "200" ]; then exit 0; fi
-            sleep 20
+          # Dos URLs durante la migración frankfurt->oregon (cazapal->palespana);
+          # basta con que UNA responda. Cuando el servicio viejo se borre, su URL
+          # simplemente fallará y se ignora.
+          ok=0
+          for URL in "https://palespana.onrender.com/" "https://cazapal.onrender.com/"; do
+            for i in 1 2 3 4; do
+              code=$(curl -s -m 60 -o /dev/null -w '%{http_code}' "$URL" || echo 000)
+              echo "$URL ping $i -> HTTP $code"
+              if [ "$code" = "200" ]; then ok=1; break; fi
+              sleep 20
+            done
           done
-          echo "Aviso: sin 200 tras varios intentos (posible arranque frío en curso)."
+          if [ "$ok" = "1" ]; then exit 0; fi
+          echo "Aviso: ninguna URL dio 200 (¿arranque frío en curso?)."
