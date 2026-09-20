@@ -4,8 +4,8 @@
 // Fed by a GitHub Action that runs Playwright against vinted.es every ~30 min
 // and posts the "datadome" cookie a real browser earned. Before accepting a
 // candidate we validate it FOR REAL against Vinted: homepage with the cookie
-// must yield session tokens, and the catalog API must then answer 200 with
-// items. Only then is the value stored (memory + best-effort file).
+// must yield session cookies, and the SSR catalog page must then answer 200
+// with item cards. Only then is the value stored (memory + best-effort file).
 //
 // This endpoint never reveals the stored value — it only receives candidates.
 // A 10s global cooldown between validations keeps third parties from using us
@@ -123,27 +123,29 @@ export async function POST(req: Request) {
     // candidate in the jar for the API probe (Vinted expects the fresh one).
     mergeSetCookiesInto(jar, homeRes.headers);
 
-    // 2) Catalog API probe with the full jar: 200 + items ⇒ cookie works.
+    // 2) Catalog SSR probe with the full jar: 200 + item cards ⇒ cookie works.
+    //    (Vinted removed the JSON API in Sept 2026 — the app scrapes the HTML
+    //    catalog now, so we validate against the exact page it will fetch.)
     const cookieHeader = Array.from(jar.entries())
       .map(([k, v]) => `${k}=${v}`)
       .join("; ");
-    const apiRes = await fetch(
-      `${base}/api/v2/catalog/items?search_text=zelda&per_page=1&order=relevance`,
+    const probeRes = await fetch(
+      `${base}/catalog?search_text=zelda&order=relevance`,
       {
         headers: {
           "User-Agent": UA,
-          Accept: "application/json, text/plain, */*",
+          Accept:
+            "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
           "Accept-Language": "es-ES,es;q=0.9",
-          "X-Requested-With": "XMLHttpRequest",
           Cookie: cookieHeader,
           Referer: `${base}/`,
         },
+        redirect: "follow",
       }
     );
-    if (apiRes.ok) {
-      const data = await apiRes.json().catch(() => null);
-      const items = (data as { items?: unknown[] } | null)?.items;
-      if (Array.isArray(items) && items.length > 0) {
+    if (probeRes.ok) {
+      const html = await probeRes.text().catch(() => "");
+      if (/\/items\/\d+-/.test(html)) {
         // Store the ORIGINAL candidate: it's what the harvester's browser
         // earned, and bootstrapSession will pick up any rotation on its own.
         setDatadomeCookie(candidate);
@@ -151,7 +153,7 @@ export async function POST(req: Request) {
       }
     }
     return NextResponse.json(
-      { ok: false, status: apiRes.status },
+      { ok: false, status: probeRes.status },
       { status: 422 }
     );
   } catch {

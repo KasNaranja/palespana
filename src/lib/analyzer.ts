@@ -16,6 +16,7 @@ import {
 import { getDemoVerdict } from "./demo";
 import { totalPrice } from "./types";
 import type { Listing, LanguageVerdict } from "./types";
+import { fetchListingPhotos } from "./vinted";
 import { analyzeImages } from "./vision";
 
 const active = new Set<string>();
@@ -59,10 +60,16 @@ async function analyzeOneLive(
   listing: Listing,
   imagesBudget: { remaining: number }
 ): Promise<void> {
-  // The catalog response already carries the full photo set per listing, so we
-  // use it directly. (The old per-item detail endpoint now 404s; falling back
-  // to it just wasted a request per listing and raised the block risk.)
-  const photos = listing.photoUrls;
+  // Vinted's catalog card only carries the front cover (their JSON API is
+  // gone; we scrape SSR HTML now), and the decisive photo for language is the
+  // BACK cover. Enrich lazily — one detail-page fetch per listing, only for
+  // listings that reach analysis, throttled inside fetchListingPhotos. On
+  // failure we fall back to the front cover we already have.
+  let photos = listing.photoUrls;
+  if (listing.source === "vinted" && photos.length <= 1) {
+    const gallery = await fetchListingPhotos(listing.vintedId);
+    if (gallery.length > photos.length) photos = gallery;
+  }
 
   // No photos at all → genuinely nothing to analyze.
   if (photos.length === 0) {

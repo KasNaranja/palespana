@@ -1,19 +1,24 @@
 // ─────────────────────────────────────────────────────────────
 // Vinted client — ISOLATED on purpose.
 //
-// Vinted has no public API. This module talks to the same internal JSON
-// endpoints that vinted.es uses for search. When Vinted changes those
-// endpoints (they do, periodically), THIS is the only file you need to patch.
+// Vinted has no public API. Worse: in Sept 2026 they REMOVED the internal
+// JSON endpoints (/api/v2/catalog/items and /api/v2/items/{id} now 404 even
+// for a real logged-in browser) and moved the web to Next.js server-side
+// rendering. The item data now only exists as rendered HTML, so this module
+// scrapes the SSR pages:
 //
-// Flow:
 //   1. bootstrapSession(): GET the homepage to obtain the anonymous session
-//      cookies Vinted requires on every /api/v2 call.
-//   2. searchListings(): GET /api/v2/catalog/items with the search text.
-//   3. fetchListingPhotos(): GET /api/v2/items/{id} to get the full photo set
-//      (the catalog list only returns the main photo; we need the back cover).
+//      cookies (Vinted still mints them via set-cookie, datadome included).
+//   2. searchListings(): GET /catalog?search_text=... (HTML, ~95 cards/page)
+//      and parse the item cards. Each card's <a> carries a title attribute
+//      like "TÍTULO, Marca: X, Estado: Y, 12.00 €, 13.20 €" plus the thumb.
+//   3. fetchListingPhotos(): GET /items/{id} (HTML) and extract the full-size
+//      (f800) gallery — the back cover lives there. Called lazily by the
+//      analyzer only for listings actually being analyzed.
 //
-// Every failure is normalized into a VintedError with a `kind` the API layer
-// maps to a friendly Spanish message. Node runtime only.
+// When Vinted changes their markup (they will), THIS is the only file to
+// patch. Every failure is normalized into a VintedError with a `kind` the API
+// layer maps to a friendly Spanish message. Node runtime only.
 // ─────────────────────────────────────────────────────────────
 
 import { config } from "./config";
@@ -85,8 +90,8 @@ async function bootstrapSession(force = false): Promise<void> {
 
   // The stored datadome changed since the last bootstrap: purge the jar's old
   // datadome copy (a rotation of the PREVIOUS value) so it cannot shadow the
-  // new one in apiGet. If this response rotates the new value, mergeSetCookies
-  // below re-adds the rotation; otherwise apiGet appends the stored value.
+  // new one in htmlGet. If this response rotates the new value, mergeSetCookies
+  // below re-adds the rotation; otherwise htmlGet appends the stored value.
   if (cookieJar && datadome !== bootstrapDatadome) {
     cookieJar = cookieJar
       .split("; ")
@@ -94,9 +99,9 @@ async function bootstrapSession(force = false): Promise<void> {
       .join("; ");
   }
 
-  // Presenting a valid datadome cookie on the homepage request is what makes
-  // Vinted hand out access_token_web/refresh_token_web (validated empirically;
-  // without it the catalog API answers 401 invalid_authentication_token).
+  // Presenting a valid datadome cookie on the homepage request keeps DataDome
+  // happy on datacenter IPs and makes Vinted hand out the anonymous session
+  // cookies (access_token_web etc.) via set-cookie.
   const headers: Record<string, string> = {
     "User-Agent": UA,
     Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -134,7 +139,8 @@ async function bootstrapSession(force = false): Promise<void> {
   }
 }
 
-async function apiGet(pathWithQuery: string, retryOnAuth = true): Promise<any> {
+/** GET an SSR page as text with the anonymous session (retries once on 401/403). */
+async function htmlGet(pathWithQuery: string, retryOnAuth = true): Promise<string> {
   await bootstrapSession();
   // Vinted rotates datadome via set-cookie, which mergeSetCookies captures —
   // in that case the jar's copy is fresher and wins. Only when the jar has no
@@ -151,12 +157,12 @@ async function apiGet(pathWithQuery: string, retryOnAuth = true): Promise<any> {
     res = await fetch(base() + pathWithQuery, {
       headers: {
         "User-Agent": UA,
-        Accept: "application/json, text/plain, */*",
+        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "es-ES,es;q=0.9",
-        "X-Requested-With": "XMLHttpRequest",
         Cookie: cookieHeader,
         Referer: base() + "/",
       },
+      redirect: "follow",
     });
   } catch (e) {
     throw new VintedError(
@@ -166,14 +172,12 @@ async function apiGet(pathWithQuery: string, retryOnAuth = true): Promise<any> {
   }
 
   // 401 (sesión caducada) y 403 (anti-bot rechazando una cookie rancia) suelen
-  // arreglarse renovando la sesión anónima. Antes el 403 fallaba a la primera y
-  // el usuario veía "Vinted ha bloqueado la petición" aunque un simple reintento
-  // con cookies nuevas hubiera funcionado. Reintentamos UNA vez, con una pausa
+  // arreglarse renovando la sesión anónima. Reintentamos UNA vez, con una pausa
   // breve para no parecer un bucle automático.
   if ((res.status === 401 || res.status === 403) && retryOnAuth) {
     await new Promise((r) => setTimeout(r, 900));
     await bootstrapSession(true);
-    return apiGet(pathWithQuery, false);
+    return htmlGet(pathWithQuery, false);
   }
   if (res.status === 429) {
     throw new VintedError("rate_limited", "Vinted está limitando peticiones.", 429);
@@ -190,11 +194,7 @@ async function apiGet(pathWithQuery: string, retryOnAuth = true): Promise<any> {
   }
   mergeSetCookies(res.headers);
   markDatadomeOk();
-  try {
-    return await res.json();
-  } catch {
-    throw new VintedError("unavailable", "Respuesta de Vinted no era JSON.");
-  }
+  return res.text();
 }
 
 // Optional: map our console chips to Vinted catalog_ids. These ids drift over
@@ -203,81 +203,88 @@ const CONSOLE_CATALOG_IDS: Partial<Record<ConsoleKey, number[]>> = {
   // e.g. ps2: [3025], switch: [3029], ...
 };
 
-
-function itemToListing(item: any): Listing | null {
-  if (!item || item.id == null) return null;
-  const id = String(item.id);
-  const priceObj = item.price ?? item.total_item_price ?? null;
-  const amount =
-    typeof priceObj === "object" && priceObj
-      ? Number(priceObj.amount)
-      : Number(priceObj);
-  if (!Number.isFinite(amount)) return null;
-
-  const currency =
-    (typeof priceObj === "object" && priceObj?.currency_code) ||
-    item.currency ||
-    "EUR";
-
-  // The catalog response already includes the FULL photo set per item (2–10
-  // photos, each with full_size_url and an is_main flag). We collect them all
-  // here — ordered with the main/front photo first — so the analyzer has the
-  // back cover without needing a second request. (The old /api/v2/items/{id}
-  // detail endpoint now returns 404, so the catalog list is our only source.)
-  const photoList: any[] = Array.isArray(item.photos) ? item.photos : [];
-  const orderedPhotos = [...photoList].sort(
-    (a, b) => (b?.is_main ? 1 : 0) - (a?.is_main ? 1 : 0)
-  );
-  let photoUrls: string[] = orderedPhotos
-    .map((p) => p?.full_size_url || p?.url)
-    .filter((u: unknown): u is string => typeof u === "string");
-  if (photoUrls.length === 0) {
-    const single = item.photo?.full_size_url || item.photo?.url || null;
-    if (single) photoUrls = [single];
-  }
-
-  // Small thumbnail for the card grid (much lighter than full_size on mobile).
-  // Vinted photos expose a `thumbnails` array; ~310px wide is ideal for a card.
-  const mainPhoto = orderedPhotos[0] || item.photo;
-  const thumbs: any[] = Array.isArray(mainPhoto?.thumbnails)
-    ? mainPhoto.thumbnails
-    : [];
-  const thumbUrl: string | null =
-    thumbs.find((t) => t?.type === "thumb310x430")?.url ||
-    thumbs.find((t) => t?.width >= 280 && t?.width <= 480)?.url ||
-    mainPhoto?.url ||
-    photoUrls[0] ||
-    null;
-
-  const url: string =
-    item.url ||
-    `${base()}/items/${id}${item.title ? "-" + slugify(item.title) : ""}`;
-
-  return {
-    source: "vinted",
-    vintedId: id,
-    title: String(item.title ?? "").trim() || `Anuncio ${id}`,
-    price: amount,
-    shippingPrice: null, // not present in catalog list; enriched later if available
-    currency: String(currency),
-    photoUrls,
-    thumbUrl,
-    listingUrl: url,
-    sellerCountry: item?.user?.country_iso_code || null,
-    languageVerdict: "pending",
-    verdictEvidence: null,
-    analyzedAt: null,
-  };
+/** Minimal HTML entity decoding for the card title attribute. */
+function decodeEntities(s: string): string {
+  return s
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#0?39;/g, "'")
+    .replace(/&#x27;/gi, "'")
+    .replace(/&nbsp;/g, " ");
 }
 
-function slugify(s: string): string {
-  return s
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/(^-|-$)+/g, "")
-    .slice(0, 60);
+function parsePriceEur(s: string): number | null {
+  // Vinted ES renders "39.99 €" (dot decimal); tolerate a comma decimal too.
+  const n = Number.parseFloat(s.replace(/\s/g, "").replace(",", "."));
+  return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * Parse the catalog page's item cards. Each card renders an anchor like
+ *   <a href="https://www.vinted.es/items/123-slug?referrer=catalog"
+ *      title="TÍTULO, Marca: X, Estado: Muy bueno, 12.00 €, 13.20 €">
+ * with the thumb <img src="https://images1.vinted.net/t/..._310x430/..."> in
+ * the same card markup (between this anchor and the next one).
+ */
+function parseCatalogCards(html: string): Listing[] {
+  type RawCard = { id: string; path: string; attr: string; at: number };
+  const cards: RawCard[] = [];
+  const seen = new Set<string>();
+  const anchorRe =
+    /href="(?:https?:\/\/[^"/]+)?(\/items\/(\d+)-[^"?]*)[^"]*"[^>]*\btitle="([^"]+)"/g;
+  for (const m of html.matchAll(anchorRe)) {
+    const id = m[2];
+    if (seen.has(id)) continue;
+    seen.add(id);
+    cards.push({ id, path: m[1], attr: m[3], at: m.index ?? 0 });
+  }
+
+  const listings: Listing[] = [];
+  for (let i = 0; i < cards.length; i++) {
+    const c = cards[i];
+    const attr = decodeEntities(c.attr);
+
+    // "TÍTULO[, Marca: X], Estado: Y, 12.00 €, 13.20 €" — anchored at the END
+    // so commas inside the title never break the split. The first price is the
+    // item price, the second is Vinted's price with buyer protection.
+    const m = attr.match(
+      /^(.*?)(?:, Marca: .{0,120}?)?, Estado: [^,]{0,80}, ([\d.,]+) €, [\d.,]+ €$/
+    );
+    // Cards without the trailing prices (rare/ads) are dropped: a Listing
+    // without a price can't be ranked or displayed.
+    if (!m) continue;
+    const title = m[1].trim();
+    const price = parsePriceEur(m[2]);
+    if (!title || price == null) continue;
+
+    // Thumb: first vinted.net image between this anchor and the next card.
+    const segEnd = i + 1 < cards.length ? cards[i + 1].at : c.at + 6000;
+    const seg = html.slice(c.at, segEnd);
+    const img = seg.match(/src="(https:\/\/images1\.vinted\.net\/[^"]+)"/);
+    const thumbUrl = img ? decodeEntities(img[1]) : null;
+
+    listings.push({
+      source: "vinted",
+      vintedId: c.id,
+      title,
+      price,
+      shippingPrice: null, // the card only shows price + buyer-protection total
+      currency: "EUR",
+      // Front cover only at search time; the analyzer lazily fetches the full
+      // gallery (back cover included) via fetchListingPhotos for the listings
+      // it actually analyzes.
+      photoUrls: thumbUrl ? [thumbUrl] : [],
+      thumbUrl,
+      listingUrl: base() + c.path,
+      sellerCountry: null, // not present in the card markup
+      languageVerdict: "pending",
+      verdictEvidence: null,
+      analyzedAt: null,
+    });
+  }
+  return listings;
 }
 
 /** Search Vinted's catalog. Returns raw (un-deduped, un-filtered) listings. */
@@ -293,43 +300,84 @@ export async function searchListings(
   // PS4 copies titled just "Under the Waves" (Vinted knows their platform from
   // its category; we don't, so we keep ambiguous titles rather than lose them).
   params.set("search_text", query);
-  // Fetch a POOL larger than we'll analyze (capped at Vinted's max ~96) so noisy
-  // queries still surface the real matches before the relevance filter + cap.
-  // Pool mayor que el cap de análisis para que el ruido no entierre las
-  // coincidencias, pero SIN pasarse: 96 (el máximo) es muy llamativo para el
-  // anti-bot de Vinted y nos empezó a devolver 403. 48 es lo que usa su propia
-  // web y sigue siendo casi 2× el cap.
-  params.set("per_page", String(Math.min(Math.max(perPage, 48), 48)));
   // "relevance" (Vinted's own match ranking) surfaces the copies that actually
-  // match the game, including older listings. "newest_first" only returned the
-  // most recently uploaded ones, burying older matches beyond our fetch window
-  // (e.g. an "Undertale PlayStation 4" listing sat at position ~73). We re-sort
-  // by price for display afterwards, so fetch order only decides WHICH listings
-  // we see, and relevance is the right set.
+  // match the game, including older listings; we re-sort by price for display.
   params.set("order", "relevance");
   const catalogIds = CONSOLE_CATALOG_IDS[consoleKey];
   if (catalogIds?.length) params.set("catalog_ids", catalogIds.join(","));
 
-  const data = await apiGet(`/api/v2/catalog/items?${params.toString()}`);
-  const items: any[] = data?.items ?? [];
-  return items.map(itemToListing).filter((l): l is Listing => l !== null);
+  // The SSR catalog page carries ~95 cards (no per_page control). That's ~2×
+  // the analysis pool, which is exactly what we want: enough depth for the
+  // relevance filter, capped below so noisy queries don't flood downstream.
+  const html = await htmlGet(`/catalog?${params.toString()}`);
+  const all = parseCatalogCards(html);
+  if (all.length === 0 && !/\/items\/\d+-/.test(html)) {
+    // Zero cards AND zero item links: either a real empty result or a layout
+    // change. An empty result page still renders the catalog chrome, so only
+    // flag markup drift when the page doesn't look like a results page at all.
+    const looksLikeCatalog = /search_text|catalog/i.test(html);
+    if (!looksLikeCatalog) {
+      throw new VintedError(
+        "unavailable",
+        "Vinted devolvió una página inesperada (¿cambió el diseño?)."
+      );
+    }
+  }
+  return all.slice(0, Math.max(perPage, 48));
+}
+
+// Detail pages are ~2MB of HTML each, so keep a small cap on how many we fetch
+// at once: the analyzer may run 16 listings in parallel, and 16 simultaneous
+// 2MB downloads would spike memory on Render's 512MB instance (and look like a
+// bot burst to DataDome).
+let detailInFlight = 0;
+const detailWaiters: Array<() => void> = [];
+const DETAIL_MAX_CONCURRENT = 3;
+
+async function acquireDetailSlot(): Promise<void> {
+  if (detailInFlight < DETAIL_MAX_CONCURRENT) {
+    detailInFlight++;
+    return;
+  }
+  await new Promise<void>((resolve) => detailWaiters.push(resolve));
+  detailInFlight++;
+}
+
+function releaseDetailSlot(): void {
+  detailInFlight--;
+  const next = detailWaiters.shift();
+  if (next) next();
 }
 
 /**
- * Fetch the full photo set for one listing (catalog list gives only the main
- * photo; the item detail gives every photo, which is where the back cover is).
- * Returns [] on failure so the analyzer can degrade to "inconclusive".
+ * Fetch the full photo set for one listing from its SSR detail page (the
+ * catalog card only shows the front cover; the gallery has the back cover —
+ * the decisive photo for language detection). /items/{id} without the slug
+ * redirects to the canonical URL. Returns [] on failure so the analyzer can
+ * degrade to the front cover it already has.
  */
 export async function fetchListingPhotos(vintedId: string): Promise<string[]> {
+  await acquireDetailSlot();
   try {
-    const data = await apiGet(`/api/v2/items/${vintedId}`);
-    const item = data?.item ?? data;
-    const photos: any[] = item?.photos ?? [];
-    const urls = photos
-      .map((p) => p?.full_size_url || p?.url)
-      .filter((u: unknown): u is string => typeof u === "string");
+    const html = await htmlGet(`/items/${vintedId}`);
+    // Gallery photos render as f800 (full-size) image URLs, in document order
+    // (front first). Thumbs/avatars use other size segments, so f800 alone
+    // selects exactly the gallery.
+    const urls: string[] = [];
+    const seen = new Set<string>();
+    for (const m of html.matchAll(
+      /https:\/\/images1\.vinted\.net\/t[^"'\\ )]+\/f800\/[^"'\\ )]+/g
+    )) {
+      const u = decodeEntities(m[0]);
+      if (!seen.has(u)) {
+        seen.add(u);
+        urls.push(u);
+      }
+    }
     return urls;
   } catch {
     return [];
+  } finally {
+    releaseDetailSlot();
   }
 }
