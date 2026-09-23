@@ -37,6 +37,16 @@ export const config = {
   geminiModel: process.env.GEMINI_VISION_MODEL?.trim() || "gemini-flash-lite-latest",
   // Minimum ms between Gemini requests (free tier ~ a handful per minute).
   geminiMinIntervalMs: Number(process.env.GEMINI_MIN_INTERVAL_MS || "4500"),
+  // Gemini relay (pal-relay, Render Oregon): Google geo-blocks the free tier
+  // from Render Frankfurt, so in production the calls go through a US relay.
+  // Empty (e.g. local dev from Spain) → direct Google endpoint.
+  geminiProxyUrl: process.env.GEMINI_PROXY_URL?.trim() || "",
+  // Shared secret for the relay; injected by Render via fromService.
+  relayToken: process.env.RELAY_TOKEN || "",
+  // Secret guarding /api/gemini-probe (the probe spends real Gemini quota, so
+  // it must not be public). Set PROBE_SECRET in the Render dashboard; while
+  // unset the probe always answers 401 (closed by default).
+  probeSecret: process.env.PROBE_SECRET || "",
   vintedEnabled: (process.env.ENABLE_VINTED || "").toLowerCase() === "true",
   vintedHost: process.env.VINTED_HOST?.trim() || "www.vinted.es",
   // Wallapop: on by default in live mode. Its search needs a location; default

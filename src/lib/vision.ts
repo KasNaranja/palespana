@@ -268,8 +268,14 @@ export async function analyzeImages(imageUrls: string[]): Promise<VisionResult> 
     },
   };
 
+  // In production the calls go through the pal-relay (US) because Google's
+  // free tier geo-blocks Render Frankfurt; locally (no GEMINI_PROXY_URL) the
+  // direct Google endpoint is used.
+  const base =
+    config.geminiProxyUrl.replace(/\/+$/, "") ||
+    "https://generativelanguage.googleapis.com";
   const url =
-    `https://generativelanguage.googleapis.com/v1beta/models/` +
+    `${base}/v1beta/models/` +
     `${encodeURIComponent(config.geminiModel)}:generateContent`;
 
   // Try across the keys: each attempt uses a DIFFERENT key (round-robin). A
@@ -292,12 +298,15 @@ export async function analyzeImages(imageUrls: string[]): Promise<VisionResult> 
     await throttleKey(ks);
     const startedAt = Date.now();
     stats.calls++;
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      "x-goog-api-key": ks.key,
+    };
+    // When going through the relay, authenticate against it.
+    if (config.geminiProxyUrl) headers["x-relay-token"] = config.relayToken;
     const r = await fetch(url, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-goog-api-key": ks.key,
-      },
+      headers,
       body: JSON.stringify(body),
     });
     if (r.ok) {

@@ -37,17 +37,19 @@ jobs:
           done
       - name: Ping app (despierta si estaba dormida)
         run: |
-          # Dos URLs durante la migración frankfurt->oregon (cazapal->palespana);
-          # basta con que UNA responda. Cuando el servicio viejo se borre, su URL
-          # simplemente fallará y se ignora.
-          ok=0
-          for URL in "https://palespana.onrender.com/" "https://cazapal.onrender.com/"; do
-            for i in 1 2 3 4; do
-              code=$(curl -s -m 60 -o /dev/null -w '%{http_code}' "$URL" || echo 000)
-              echo "$URL ping $i -> HTTP $code"
-              if [ "$code" = "200" ]; then ok=1; break; fi
-              sleep 20
-            done
+          # SOLO se mantiene despierta la app (cazapal, Frankfurt). El relé de
+          # Gemini (pal-relay, Oregon) se deja dormir A PROPÓSITO: Render da
+          # 750 "free instance hours" al MES por workspace y un servicio free
+          # las consume mientras está despierto. Dos servicios 24/7 son
+          # ~1.470 h/mes → hacia el día 15 Render suspende TODOS los servicios
+          # free hasta el mes siguiente. Uno solo (~744 h) cabe justo. La
+          # primera llamada Gemini tras ~15 min de inactividad absorbe el
+          # arranque frío del relé (~1 min): el fetch de vision.ts no tiene
+          # timeout, simplemente espera.
+          for i in 1 2 3 4; do
+            code=$(curl -s -m 60 -o /dev/null -w '%{http_code}' "https://cazapal.onrender.com/" || echo 000)
+            echo "ping $i -> HTTP $code"
+            if [ "$code" = "200" ]; then exit 0; fi
+            sleep 20
           done
-          if [ "$ok" = "1" ]; then exit 0; fi
-          echo "Aviso: ninguna URL dio 200 (¿arranque frío en curso?)."
+          echo "Aviso: la app no dio 200 (¿arranque frío en curso?)."

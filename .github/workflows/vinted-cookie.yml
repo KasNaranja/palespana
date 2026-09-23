@@ -32,10 +32,9 @@ jobs:
           cat > mint.mjs <<'EOF'
           import { chromium } from 'playwright';
 
-          // Both URLs during the frankfurt->oregon migration (cazapal->palespana);
-          // success if AT LEAST ONE app accepts the cookie. Once the old service
-          // is gone its URL just fails and is ignored.
-          const APPS = ['https://palespana.onrender.com', 'https://cazapal.onrender.com'];
+          // The one and only app service (cazapal, Frankfurt). The Gemini
+          // relay (pal-relay) does not take cookies, so it is not listed here.
+          const APPS = ['https://cazapal.onrender.com'];
           const UA =
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
             '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
