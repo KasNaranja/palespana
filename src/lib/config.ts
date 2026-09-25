@@ -34,7 +34,16 @@ const geminiKeys = (
 
 export const config = {
   geminiKeys,
-  geminiModel: process.env.GEMINI_VISION_MODEL?.trim() || "gemini-3.1-flash-lite",
+  // The "-latest" alias is QUARANTINED: it broke production twice (silent
+  // rotation into a geo-blocked model, then a day of global 503 saturation).
+  // The Render service still carries it in its env (blueprint env-value edits
+  // don't auto-sync like resource additions do), so we ignore that one value
+  // here; any OTHER explicit model in the env still wins over the default.
+  geminiModel:
+    (() => {
+      const m = process.env.GEMINI_VISION_MODEL?.trim();
+      return m && m !== "gemini-flash-lite-latest" ? m : "gemini-3.1-flash-lite";
+    })(),
   // Minimum ms between Gemini requests (free tier ~ a handful per minute).
   geminiMinIntervalMs: Number(process.env.GEMINI_MIN_INTERVAL_MS || "4500"),
   // Gemini relay (pal-relay, Render Oregon): Google geo-blocks the free tier
