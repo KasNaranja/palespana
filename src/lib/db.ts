@@ -18,6 +18,7 @@ import type {
   Listing,
   LanguageVerdict,
   MarketSource,
+  SealedVerdict,
   SearchMeta,
 } from "./types";
 
@@ -26,6 +27,7 @@ interface CacheEntry {
   evidence: string | null;
   analyzedAt: string;
   platform?: DetectedPlatform;
+  sealed?: SealedVerdict;
 }
 
 function resolveFile(): string {
@@ -112,6 +114,7 @@ export interface CachedVerdict {
   evidence: string | null;
   analyzedAt: string;
   platform?: DetectedPlatform;
+  sealed?: SealedVerdict;
 }
 
 /** Cache key namespaced by source so ids that collide across marketplaces never
@@ -172,11 +175,12 @@ export function setCachedVerdict(
   verdict: LanguageVerdict,
   evidence: string | null,
   analyzedAt: string,
-  platform: DetectedPlatform = "unknown"
+  platform: DetectedPlatform = "unknown",
+  sealed: SealedVerdict = "unknown"
 ): void {
   if (!config.cacheEnabled) return; // nothing is stored
   const ck = cacheKey(source, vintedId);
-  const entry: CacheEntry = { verdict, evidence, analyzedAt, platform };
+  const entry: CacheEntry = { verdict, evidence, analyzedAt, platform, sealed };
   _cache[ck] = entry; // L1
   if (redisEnabled) {
     // Fire-and-forget persistent write; never blocks analysis.
@@ -240,7 +244,8 @@ export function updateListingVerdict(
   evidence: string | null,
   analyzedAt: string,
   persist = true,
-  platform: DetectedPlatform = "unknown"
+  platform: DetectedPlatform = "unknown",
+  sealed: SealedVerdict = "unknown"
 ): void {
   const rec = searches.get(searchId);
   if (rec) {
@@ -251,11 +256,20 @@ export function updateListingVerdict(
       l.languageVerdict = verdict;
       l.verdictEvidence = evidence;
       l.detectedPlatform = platform;
+      l.sealed = sealed;
       l.analyzedAt = analyzedAt;
     }
   }
   if (verdict !== "pending" && persist) {
-    setCachedVerdict(source, vintedId, verdict, evidence, analyzedAt, platform);
+    setCachedVerdict(
+      source,
+      vintedId,
+      verdict,
+      evidence,
+      analyzedAt,
+      platform,
+      sealed
+    );
   }
 }
 

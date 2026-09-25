@@ -27,35 +27,79 @@ function Grid({ listings }: { listings: Listing[] }) {
 export function Results({
   listings,
   soloEspanol,
+  precintados,
   sort,
 }: {
   listings: Listing[];
   soloEspanol: boolean;
+  precintados: boolean;
   sort: SortKey;
 }) {
   const [expandInconclusive, setExpandInconclusive] = useState(false);
+
+  // "Precintados" ON = only copies confirmed BOTH playable in Spanish (Spanish
+  // edition "es" OR multi-language disc with ES, "es_multi" — same pair the
+  // "Solo en español" toggle shows) AND new with the factory seal intact
+  // (sealed "yes"). Applied as a PRE-filter so the grouping below (with "Solo
+  // en español" on or off) works unchanged over the reduced list, which already
+  // orders "es" before "es_multi".
+  const visible = useMemo(
+    () =>
+      precintados
+        ? listings.filter(
+            (l) =>
+              (l.languageVerdict === "es" ||
+                l.languageVerdict === "es_multi") &&
+              l.sealed === "yes"
+          )
+        : listings,
+    [listings, precintados]
+  );
 
   const groups = useMemo(() => {
     const by = sorter(sort);
     // "es" (Spanish edition, 🟢) and "es_multi" (multi-language disc that
     // includes Spanish, 🔵) are kept in SEPARATE groups so we can show the
     // Spanish editions first; within each group we sort by price.
-    const es = listings.filter((l) => l.languageVerdict === "es").sort(by);
-    const esMulti = listings
+    const es = visible.filter((l) => l.languageVerdict === "es").sort(by);
+    const esMulti = visible
       .filter((l) => l.languageVerdict === "es_multi")
       .sort(by);
-    const pending = listings
+    const pending = visible
       .filter((l) => l.languageVerdict === "pending")
       .sort(by);
-    const inconclusive = listings
+    const inconclusive = visible
       .filter((l) => l.languageVerdict === "inconclusive")
       .sort(by);
-    const other = listings
+    const other = visible
       .filter((l) => l.languageVerdict === "other")
       .sort(by);
-    const all = [...listings].sort(by);
+    const all = [...visible].sort(by);
     return { es, esMulti, pending, inconclusive, other, all };
-  }, [listings, sort]);
+  }, [visible, sort]);
+
+  // Precintados filtered everything out → same friendly empty state as the
+  // language filter (never a bare, broken grid).
+  if (precintados && visible.length === 0) {
+    const analyzing = listings.filter(
+      (l) => l.languageVerdict === "pending"
+    ).length;
+    return (
+      <EmptyState
+        title={`Hay ${listings.length} ${
+          listings.length === 1 ? "copia" : "copias"
+        }, pero ninguna precintada confirmada en español`}
+      >
+        <p className="text-sm text-texto-3">
+          {analyzing > 0
+            ? `Todavía se están analizando ${analyzing} ${
+                analyzing === 1 ? "anuncio" : "anuncios"
+              }; puede aparecer alguna.`
+            : "Desactiva “Precintados” para ver el resto."}
+        </p>
+      </EmptyState>
+    );
+  }
 
   // Toggle OFF (default view): show everything, but grouped by verdict —
   // Spanish editions (🟢) first, then playable-in-Spanish (🔵), then the rest

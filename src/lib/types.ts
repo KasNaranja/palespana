@@ -34,6 +34,13 @@ export type DetectedPlatform =
   | "other"
   | "unknown";
 
+// Factory-seal verdict from the vision AI: is the copy NEW with the seal
+// intact? "yes" only on clear visual evidence (the horizontal pull-tab strip
+// printed "PlayStation"/"PS4"/"PS5" along the bottom of a PS4/PS5 front cover,
+// intact shrink-wrap, the red "Nintendo Switch" strip). "no" = clearly opened.
+// "unknown" = can't tell from the photos (default → never guessed as sealed).
+export type SealedVerdict = "yes" | "no" | "unknown";
+
 // Marketplaces CazaPAL searches. Each listing carries its source so the UI can
 // show two independent progress bars and tag every card.
 export type MarketSource = "vinted" | "wallapop" | "ebay";
@@ -90,6 +97,7 @@ export interface Listing {
   languageVerdict: LanguageVerdict;
   verdictEvidence: string | null; // one sentence in Spanish
   detectedPlatform?: DetectedPlatform; // console read from the box art by the AI
+  sealed?: SealedVerdict; // "yes" = new copy with the factory seal intact
   analyzedAt: string | null; // ISO timestamp
 }
 
@@ -141,6 +149,7 @@ export interface VisionResult {
   verdict: "es" | "es_multi" | "other" | "inconclusive";
   evidence: string;
   platform: DetectedPlatform;
+  sealed: SealedVerdict;
 }
 
 export interface ApiError {

@@ -127,8 +127,44 @@ export function ListingCard({ listing }: { listing: Listing }) {
           </button>
         </div>
 
-        {/* AI seal (language verdict) — bottom-left (guía §5) */}
-        <div className="absolute bottom-1.5 left-1.5 right-1.5">
+        {/* AI seals — bottom-left (guía §5): factory-seal badge (gualda, always
+            shown when detected, filter or not) stacked over the language badge. */}
+        <div className="absolute bottom-1.5 left-1.5 right-1.5 flex flex-col items-start gap-1">
+          {listing.sealed === "yes" && (
+            // Filled gualda pill + padlock (NOT the dot-pill anatomy of the
+            // language badges, so it can't be confused with the amber
+            // "No concluyente" verdict): a physical-state tag, not a verdict.
+            <span
+              title="Copia nueva con el precinto de fábrica intacto"
+              className="inline-flex max-w-full items-center gap-1 rounded-full border border-transparent bg-gold-500 px-1.5 py-0.5 text-[11px] font-bold text-carbon shadow-sm sm:gap-1.5 sm:px-2.5 sm:py-1 sm:text-xs"
+            >
+              <svg
+                width="10"
+                height="10"
+                viewBox="0 0 24 24"
+                fill="none"
+                aria-hidden
+                className="shrink-0"
+              >
+                <rect
+                  x="4"
+                  y="10.5"
+                  width="16"
+                  height="10.5"
+                  rx="2"
+                  stroke="currentColor"
+                  strokeWidth="2.5"
+                />
+                <path
+                  d="M8 10.5V7a4 4 0 0 1 8 0v3.5"
+                  stroke="currentColor"
+                  strokeWidth="2.5"
+                  strokeLinecap="round"
+                />
+              </svg>
+              <span className="truncate">Precintado</span>
+            </span>
+          )}
           <LanguageBadge
             verdict={listing.languageVerdict}
             evidence={listing.verdictEvidence}

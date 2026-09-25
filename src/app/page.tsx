@@ -44,6 +44,9 @@ export default function Home() {
   // "Solo en español" starts OFF so a fresh search shows every result; the user
   // turns it on when they want to filter. Also reset to OFF on each new search.
   const [soloEspanol, setSoloEspanol] = useState(false);
+  // "Precintados": show ONLY new+factory-sealed Spanish copies (verdict "es"
+  // AND sealed "yes"). Independent of "Solo en español"; same reset rules.
+  const [precintados, setPrecintados] = useState(false);
   const [sort, setSort] = useState<SortKey>("total");
   // Footer view: the search (Caza) or the saved favorites list.
   const [view, setView] = useState<"search" | "favorites">("search");
@@ -85,6 +88,7 @@ export default function Home() {
       lastSubmit.current = { q: trimmed, c };
       setActive(null);
       setSoloEspanol(false); // always unchecked after a new search
+      setPrecintados(false);
       search.mutate({ q: trimmed, c });
     },
     [search]
@@ -98,7 +102,8 @@ export default function Home() {
     }
   };
 
-  // Keyboard shortcuts: "/" focuses search, "s" toggles Solo en español.
+  // Keyboard shortcuts: "/" focuses search, "s" toggles Solo en español,
+  // "p" toggles Precintados.
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       const el = e.target as HTMLElement | null;
@@ -115,6 +120,9 @@ export default function Home() {
       } else if ((e.key === "s" || e.key === "S") && !typing && active) {
         e.preventDefault();
         setSoloEspanol((v) => !v);
+      } else if ((e.key === "p" || e.key === "P") && !typing && active) {
+        e.preventDefault();
+        setPrecintados((v) => !v);
       }
     }
     window.addEventListener("keydown", onKey);
@@ -249,12 +257,20 @@ export default function Home() {
                       })}
                     </div>
                     <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
-                      <Toggle
-                        id="solo-es"
-                        checked={soloEspanol}
-                        onChange={setSoloEspanol}
-                        label="Solo en español"
-                      />
+                      <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+                        <Toggle
+                          id="solo-es"
+                          checked={soloEspanol}
+                          onChange={setSoloEspanol}
+                          label="Solo en español"
+                        />
+                        <Toggle
+                          id="precintados"
+                          checked={precintados}
+                          onChange={setPrecintados}
+                          label="Precintados"
+                        />
+                      </div>
                       <SortDropdown value={sort} onChange={setSort} />
                     </div>
                   </div>
@@ -264,6 +280,7 @@ export default function Home() {
                       key={active.id}
                       listings={listings}
                       soloEspanol={soloEspanol}
+                      precintados={precintados}
                       sort={sort}
                     />
                   </div>

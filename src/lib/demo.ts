@@ -4,7 +4,7 @@
 // demoable on first run with no Anthropic key or Vinted access.
 // ─────────────────────────────────────────────────────────────
 
-import type { Listing, LanguageVerdict } from "./types";
+import type { Listing, LanguageVerdict, SealedVerdict } from "./types";
 
 interface DemoSeed {
   id: string;
@@ -15,6 +15,9 @@ interface DemoSeed {
   photos: string[];
   verdict: Exclude<LanguageVerdict, "pending">;
   evidence: string;
+  /** Pre-baked factory-seal verdict; omitted = "unknown". Lets the
+   *  "Precintados" filter and its badge be demoable without an API key. */
+  sealed?: SealedVerdict;
 }
 
 // Ordered loosely; the app re-sorts by total price ascending anyway.
@@ -126,7 +129,8 @@ const SEEDS: DemoSeed[] = [
     photos: ["/demo/front-es.svg", "/demo/back-es.svg"],
     verdict: "es",
     evidence:
-      "Se lee 'Totalmente en castellano' en la contraportada junto al código AGB-BPEE-ES.",
+      "Se lee 'Totalmente en castellano' en la contraportada junto al código AGB-BPEE-ES; el celofán muestra pliegues intactos en las esquinas.",
+    sealed: "yes",
   },
   {
     id: "demo-fr-2",
@@ -159,7 +163,8 @@ const SEEDS: DemoSeed[] = [
     photos: ["/demo/front-es.svg", "/demo/back-es.svg"],
     verdict: "es",
     evidence:
-      "La contraportada española incluye clasificación PEGI con textos en castellano y sello PAL España.",
+      "La contraportada española incluye clasificación PEGI con textos en castellano y sello PAL España; el envoltorio retráctil está intacto con su costura visible.",
+    sealed: "yes",
   },
 ];
 
@@ -185,12 +190,14 @@ export function getDemoListings(query: string): Listing[] {
 }
 
 /** Pre-baked verdicts the demo analyzer reveals progressively. */
-export function getDemoVerdict(
-  vintedId: string
-): { verdict: Exclude<LanguageVerdict, "pending">; evidence: string } | null {
+export function getDemoVerdict(vintedId: string): {
+  verdict: Exclude<LanguageVerdict, "pending">;
+  evidence: string;
+  sealed?: SealedVerdict;
+} | null {
   const seed = SEEDS.find((s) => s.id === vintedId);
   if (!seed) return null;
-  return { verdict: seed.verdict, evidence: seed.evidence };
+  return { verdict: seed.verdict, evidence: seed.evidence, sealed: seed.sealed };
 }
 
 export const DEMO_QUERY_LABEL = "Pokémon Esmeralda";

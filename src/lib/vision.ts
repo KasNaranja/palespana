@@ -9,7 +9,7 @@
 // ─────────────────────────────────────────────────────────────
 
 import { config, COST_GUARD } from "./config";
-import type { DetectedPlatform, VisionResult } from "./types";
+import type { DetectedPlatform, SealedVerdict, VisionResult } from "./types";
 
 const SYSTEM_PROMPT = `Eres un experto en videojuegos físicos del mercado europeo (PAL) e identificas, a partir de las fotos de la carátula y la contraportada, si una copia está en español y de qué forma.
 
@@ -53,9 +53,17 @@ DETECCIÓN DE PLATAFORMA (campo "platform") — identifica la CONSOLA de la caja
 - "unknown" = no se distingue la plataforma con seguridad.
 Usa "unknown" si dudas; NO adivines la plataforma. La plataforma es INDEPENDIENTE del idioma (un juego PS4 puede estar en cualquier idioma).
 
-El campo "evidence" debe ser UNA sola frase en español citando la evidencia concreta vista (qué palabras, en qué idioma, y si viste "ES" en la lista de idiomas).`;
+DETECCIÓN DE PRECINTO (campo "sealed") — ¿la copia está NUEVA y precintada de fábrica?
+- "yes" = SOLO con evidencia visual clara del precinto de fábrica. La señal MÁS fiable en PS4/PS5 PAL: la TIRA de apertura del precinto — una tira ESTRECHA que NO está impresa en la carátula sino que forma parte del ENVOLTORIO de plástico transparente, situada en el borde INFERIOR de la portada, con la palabra "PlayStation" repetida muchas veces en letra pequeña a lo largo de toda la tira (o con "PS4"/"PS5" en esa tira). Si esa tira se ve presente e intacta, la copia está precintada.
+  OJO — NO CONFUNDIR: TODAS las carátulas de PS4/PS5 llevan IMPRESA de fábrica una banda con "PS4 / PlayStation 4" (o "PS5 / PlayStation 5") en el borde SUPERIOR; esa banda forma parte del diseño de la carátula, existe también en copias abiertas y NUNCA cuenta como precinto. La tira de precinto es algo DISTINTO y va siempre en el borde OPUESTO al de esa banda del logotipo (fíjate en el borde opuesto aunque la foto esté girada). Si la única banda con "PS4"/"PlayStation" que ves es la del logotipo de la consola, sealed = "unknown".
+  Otras señales válidas: plástico retráctil intacto envolviendo la caja — cuenta SOLO si ves PLIEGUES o ARRUGAS del plástico, solapas/bordes del celofán doblados en las esquinas o el lomo, o la costura/soldadura del envoltorio; el simple brillo o reflejo de la carátula NO cuenta jamás como celofán. En Nintendo Switch PAL, la tira de apertura ROJA con el texto "Nintendo Switch".
+- "no" = la copia se ve claramente ABIERTA: caja sin plástico, tira de apertura rota o ausente, fotos del disco/cartucho suelto, del interior de la caja o del manual.
+- "unknown" = el valor por defecto: las fotos no permiten juzgarlo con seguridad.
+MUY IMPORTANTE: NO adivines "yes" — los reflejos de una carátula brillante NO son celofán; ante cualquier duda, "unknown". Que el vendedor diga "nuevo" NO cuenta: solo lo que se VE en las fotos. El precinto es INDEPENDIENTE del idioma y de la plataforma (rellena SIEMPRE los tres campos).
 
-const USER_PROMPT = `Analiza estas fotos de una copia de un videojuego a la venta. ¿Está en español? ¿De qué consola/plataforma es la caja?`;
+El campo "evidence" debe ser UNA sola frase en español citando la evidencia concreta vista (qué palabras, en qué idioma, y si viste "ES" en la lista de idiomas); si sealed es "yes" o "no", añade en esa misma frase la señal concreta del precinto que viste (p. ej. "tira inferior con 'PlayStation' repetido intacta", "pliegues del celofán en el lomo", o "foto del disco fuera de la caja").`;
+
+const USER_PROMPT = `Analiza estas fotos de una copia de un videojuego a la venta. ¿Está en español? ¿De qué consola/plataforma es la caja? ¿Está nueva y precintada de fábrica?`;
 
 const PLATFORMS = [
   "ps1",
@@ -70,6 +78,8 @@ const PLATFORMS = [
   "unknown",
 ] as const;
 
+const SEALED = ["yes", "no", "unknown"] as const;
+
 const RESPONSE_SCHEMA = {
   type: "object",
   properties: {
@@ -79,8 +89,9 @@ const RESPONSE_SCHEMA = {
     },
     evidence: { type: "string" },
     platform: { type: "string", enum: [...PLATFORMS] },
+    sealed: { type: "string", enum: [...SEALED] },
   },
-  required: ["verdict", "evidence", "platform"],
+  required: ["verdict", "evidence", "platform", "sealed"],
 };
 
 const MAX_BYTES = 5 * 1024 * 1024; // keep well under Gemini limits
@@ -223,7 +234,11 @@ function parseVerdict(text: string): VisionResult | null {
   )
     ? rawP
     : "unknown";
-  return { verdict: v, evidence, platform };
+  const rawS = obj?.sealed;
+  const sealed: SealedVerdict = (SEALED as readonly string[]).includes(rawS)
+    ? rawS
+    : "unknown";
+  return { verdict: v, evidence, platform, sealed };
 }
 
 /**
@@ -364,6 +379,7 @@ export async function analyzeImages(imageUrls: string[]): Promise<VisionResult> 
       verdict: "inconclusive",
       evidence: "El análisis no devolvió un resultado claro sobre el idioma.",
       platform: "unknown",
+      sealed: "unknown",
     };
   }
   return parsed;

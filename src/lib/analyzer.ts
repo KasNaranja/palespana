@@ -118,7 +118,8 @@ async function analyzeOneLive(
       result.evidence,
       nowIso(),
       true,
-      result.platform
+      result.platform,
+      result.sealed
     );
   } catch (e) {
     // Transient failure (rate limit, overload, image download): do NOT persist,
@@ -149,7 +150,10 @@ async function analyzeOneDemo(
       listing.vintedId,
       baked.verdict,
       baked.evidence,
-      nowIso()
+      nowIso(),
+      true,
+      "unknown",
+      baked.sealed ?? "unknown"
     );
   } else {
     updateListingVerdict(
@@ -202,7 +206,18 @@ export async function startAnalysis(searchId: string): Promise<void> {
     const pending: Listing[] = [];
     candidates.forEach((l, i) => {
       const c = cached[i];
-      if (c && c.verdict !== "pending") {
+      // Entries cached BEFORE the "Precintados" feature carry no `sealed` field.
+      // Replaying them as-is would freeze those listings at sealed:"unknown"
+      // forever (the hit re-persists the entry), silently emptying the filter on
+      // every already-searched game. Treat as a MISS — but ONLY for the verdicts
+      // the seal filter can actually show (es / es_multi), so each old Spanish
+      // copy is re-analyzed just once and re-cached with a real seal verdict,
+      // without re-burning the Gemini quota for the whole cache.
+      const needsSeal =
+        !!c &&
+        (c.verdict === "es" || c.verdict === "es_multi") &&
+        c.sealed === undefined;
+      if (c && c.verdict !== "pending" && !needsSeal) {
         updateListingVerdict(
           searchId,
           l.source,
@@ -211,7 +226,8 @@ export async function startAnalysis(searchId: string): Promise<void> {
           c.evidence,
           c.analyzedAt,
           true,
-          c.platform ?? "unknown"
+          c.platform ?? "unknown",
+          c.sealed ?? "unknown"
         );
       } else {
         pending.push(l);
