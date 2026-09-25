@@ -51,6 +51,17 @@ export const config = {
       const m = process.env.GEMINI_VISION_MODEL?.trim();
       return m && m !== "gemini-flash-lite-latest" ? m : "gemini-3.1-flash-lite";
     })(),
+  // Models tried, in order, when the main one answers 503 (overloaded). A 503
+  // is about the MODEL, not the key, so rotating keys against it is useless;
+  // switching model is what works. Each model also has its own free quota per
+  // project, so fallbacks add daily capacity too. Explicit ids only (aliases
+  // rotate silently). Validated with a real cover: both read platform + seal.
+  geminiFallbackModels: (
+    process.env.GEMINI_FALLBACK_MODELS || "gemini-3.5-flash-lite"
+  )
+    .split(",")
+    .map((m) => m.trim())
+    .filter(Boolean),
   // Minimum ms between Gemini requests (free tier ~ a handful per minute).
   geminiMinIntervalMs: Number(process.env.GEMINI_MIN_INTERVAL_MS || "4500"),
   // Gemini relay (pal-relay, Render Oregon): Google geo-blocks the free tier

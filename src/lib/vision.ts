@@ -132,13 +132,15 @@ interface KeyState {
   key: string;
   lastCallAt: number;
   chain: Promise<void>;
-  parkedUntil: number; // while Date.now() < this, skip the key
+  // Per MODEL: Gemini quotas (per-minute and per-day) are per project AND per
+  // model, so a key exhausted on one model is still good on another.
+  parkedUntil: Record<string, number>; // model → skip this key until then
 }
 const keyStates: KeyState[] = config.geminiKeys.map((key) => ({
   key,
   lastCallAt: 0,
   chain: Promise.resolve(),
-  parkedUntil: 0,
+  parkedUntil: {},
 }));
 let rrIndex = 0;
 
@@ -173,12 +175,39 @@ const stats = {
   lastErrDetail: "",
 };
 
+// ── Model chain ────────────────────────────────────────────────
+// A 503 means the MODEL is overloaded for everyone; every key hits the same
+// wall. So on a 503 the model is benched for a short while and the next model
+// in the chain takes over. Benching is shared by all concurrent analyses, so
+// one 503 spares the rest of the search from walking into the same wall.
+const MODEL_BENCH_MS = 45_000;
+const modelChain: string[] = Array.from(
+  new Set([config.geminiModel, ...config.geminiFallbackModels])
+);
+const benchedUntil = new Map<string, number>();
+const modelStats: Record<string, { ok: number; r503: number }> = {};
+for (const m of modelChain) modelStats[m] = { ok: 0, r503: 0 };
+
+/** Models to try now, in priority order: non-benched first; if every model is
+ *  benched, the whole chain anyway (better a retry than an instant give-up). */
+function modelsToTry(): string[] {
+  const now = Date.now();
+  const fresh = modelChain.filter((m) => (benchedUntil.get(m) ?? 0) <= now);
+  return fresh.length > 0 ? fresh : modelChain;
+}
+
 export function getVisionStats() {
+  const now = Date.now();
   return {
     ...stats,
     avgCallMs: stats.ok ? Math.round(stats.totalCallMs / stats.ok) : 0,
     avgWaitMs: stats.calls ? Math.round(stats.totalWaitMs / stats.calls) : 0,
     minIntervalMs: config.geminiMinIntervalMs,
+    models: modelChain.map((m) => ({
+      model: m,
+      ...modelStats[m],
+      benched: (benchedUntil.get(m) ?? 0) > now,
+    })),
   };
 }
 
@@ -190,16 +219,18 @@ export function getKeyStats(): {
   active: number;
 } {
   const now = Date.now();
-  const parked = keyStates.filter((k) => k.parkedUntil > now).length;
+  const parked = keyStates.filter(
+    (k) => (k.parkedUntil[config.geminiModel] ?? 0) > now
+  ).length;
   return { total: keyStates.length, parked, active: keyStates.length - parked };
 }
 
 /** Next non-parked, not-yet-tried key (round-robin). Null if none available. */
-function pickKey(tried: Set<string>): KeyState | null {
+function pickKey(tried: Set<string>, model: string): KeyState | null {
   const now = Date.now();
   for (let i = 0; i < keyStates.length; i++) {
     const ks = keyStates[(rrIndex + i) % keyStates.length];
-    if (tried.has(ks.key) || ks.parkedUntil > now) continue;
+    if (tried.has(ks.key) || (ks.parkedUntil[model] ?? 0) > now) continue;
     rrIndex = (rrIndex + i + 1) % keyStates.length;
     return ks;
   }
@@ -289,72 +320,81 @@ export async function analyzeImages(imageUrls: string[]): Promise<VisionResult> 
   const base =
     config.geminiProxyUrl.replace(/\/+$/, "") ||
     "https://generativelanguage.googleapis.com";
-  const url =
-    `${base}/v1beta/models/` +
-    `${encodeURIComponent(config.geminiModel)}:generateContent`;
+  const urlFor = (model: string) =>
+    `${base}/v1beta/models/${encodeURIComponent(model)}:generateContent`;
 
-  // Try across the keys: each attempt uses a DIFFERENT key (round-robin). A
-  // per-DAY quota 429 parks that key (~30 min) so we lean on the others; a
-  // per-minute 429 / 503 just moves to the next key. After every non-parked key
-  // is tried, one backoff pass is allowed for transient blips.
-  const tried = new Set<string>();
+  // Walk the model chain (see modelsToTry). Within a model, try across the
+  // keys: each attempt uses a DIFFERENT key (round-robin). A per-DAY quota 429
+  // parks that key (~30 min) so we lean on the others; a per-minute 429 moves
+  // to the next key. A 503 benches the MODEL and jumps to the next one right
+  // away — retrying other keys against an overloaded model only burns time.
   let res: Response | null = null;
-  const maxTries = keyStates.length + 1;
-  for (let attempt = 0; attempt < maxTries; attempt++) {
-    let ks = pickKey(tried);
-    if (!ks) {
-      if (tried.size === 0) break; // no usable keys at all
-      tried.clear(); // second pass over the non-parked keys
-      await sleep(1500);
-      ks = pickKey(tried);
-      if (!ks) break;
-    }
-    tried.add(ks.key);
-    await throttleKey(ks);
-    const startedAt = Date.now();
-    stats.calls++;
-    const headers: Record<string, string> = {
-      "Content-Type": "application/json",
-      "x-goog-api-key": ks.key,
-    };
-    // When going through the relay, authenticate against it.
-    if (config.geminiProxyUrl) headers["x-relay-token"] = config.relayToken;
-    const r = await fetch(url, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(body),
-    });
-    if (r.ok) {
-      stats.ok++;
-      stats.totalCallMs += Date.now() - startedAt;
-    }
-    if (r.status === 429) {
-      const detail = await r.text().catch(() => "");
-      // Gemini responde RESOURCE_EXHAUSTED tanto para el límite POR MINUTO como
-      // para el DIARIO, así que NO se puede usar ese código para decidir. Solo
-      // la cuota DIARIA (métrica "...PerDay...") justifica aparcar la clave 30
-      // min; un 429 por minuto es transitorio y basta con rotar a otra clave
-      // (si se aparcaba, con varias claves en paralelo se aparcaban casi todas
-      // y el rendimiento caía al de 1 sola clave).
-      if (/per\s*day/i.test(detail)) {
-        stats.r429day++;
-        ks.parkedUntil = Date.now() + 30 * 60 * 1000; // cuota diaria agotada
-      } else {
-        stats.r429min++;
-        // Límite POR MINUTO (ojo: es por PROYECTO, así que varias claves del
-        // mismo proyecto se pisan). Pausa corta para que la ventana se recupere:
-        // sin ella el motor reintenta en bucle contra claves limitadas y el
-        // rendimiento se desploma; con 30 min se aparcaban casi todas.
-        ks.parkedUntil = Date.now() + 20 * 1000;
+  for (const model of modelsToTry()) {
+    const url = urlFor(model);
+    const tried = new Set<string>();
+    const maxTries = keyStates.length + 1;
+    for (let attempt = 0; attempt < maxTries; attempt++) {
+      let ks = pickKey(tried, model);
+      if (!ks) {
+        if (tried.size === 0) break; // no usable keys at all
+        tried.clear(); // second pass over the non-parked keys
+        await sleep(1500);
+        ks = pickKey(tried, model);
+        if (!ks) break;
       }
-      continue; // move to another key
+      tried.add(ks.key);
+      await throttleKey(ks);
+      const startedAt = Date.now();
+      stats.calls++;
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+        "x-goog-api-key": ks.key,
+      };
+      // When going through the relay, authenticate against it.
+      if (config.geminiProxyUrl) headers["x-relay-token"] = config.relayToken;
+      const r = await fetch(url, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+      });
+      if (r.ok) {
+        stats.ok++;
+        modelStats[model].ok++;
+        stats.totalCallMs += Date.now() - startedAt;
+      }
+      if (r.status === 429) {
+        const detail = await r.text().catch(() => "");
+        // Gemini responde RESOURCE_EXHAUSTED tanto para el límite POR MINUTO como
+        // para el DIARIO, así que NO se puede usar ese código para decidir. Solo
+        // la cuota DIARIA (métrica "...PerDay...") justifica aparcar la clave 30
+        // min; un 429 por minuto es transitorio y basta con rotar a otra clave
+        // (si se aparcaba, con varias claves en paralelo se aparcaban casi todas
+        // y el rendimiento caía al de 1 sola clave).
+        if (/per\s*day/i.test(detail)) {
+          stats.r429day++;
+          ks.parkedUntil[model] = Date.now() + 30 * 60 * 1000; // cuota diaria agotada
+        } else {
+          stats.r429min++;
+          // Límite POR MINUTO (ojo: es por PROYECTO, así que varias claves del
+          // mismo proyecto se pisan). Pausa corta para que la ventana se recupere:
+          // sin ella el motor reintenta en bucle contra claves limitadas y el
+          // rendimiento se desploma; con 30 min se aparcaban casi todas.
+          ks.parkedUntil[model] = Date.now() + 20 * 1000;
+        }
+        continue; // move to another key
+      }
+      if (r.status === 503) {
+        stats.r503++;
+        modelStats[model].r503++;
+        benchedUntil.set(model, Date.now() + MODEL_BENCH_MS);
+        break; // overloaded model → next model in the chain
+      }
+      res = r;
+      break;
     }
-    if (r.status === 503) {
-      stats.r503++;
-      continue; // overloaded → another key
-    }
-    res = r;
-    break;
+    if (res) break;
+    // No answer from this model (overloaded, or every key rate-limited /
+    // out of daily quota FOR THIS MODEL): the next model has its own quotas.
   }
 
   if (!res) {

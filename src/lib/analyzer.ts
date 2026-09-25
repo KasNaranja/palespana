@@ -21,6 +21,10 @@ import { analyzeImages } from "./vision";
 
 const active = new Set<string>();
 
+// Pause before the retry pass: long enough for a 503 burst to ease and for
+// per-minute 429 key parking (20s) to lapse.
+const RETRY_PAUSE_MS = 20_000;
+
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
 }
@@ -55,11 +59,15 @@ function selectPhotos(all: string[]): string[] {
   return Array.from(new Set(picks));
 }
 
+/** Returns false on a TRANSIENT failure (overload, rate limit, image
+ *  download) when `finalAttempt` is false: the listing is left "pending" so
+ *  the caller can retry it later and the UI keeps polling meanwhile. */
 async function analyzeOneLive(
   searchId: string,
   listing: Listing,
-  imagesBudget: { remaining: number }
-): Promise<void> {
+  imagesBudget: { remaining: number },
+  finalAttempt: boolean
+): Promise<boolean> {
   // Vinted's catalog card only carries the front cover (their JSON API is
   // gone; we scrape SSR HTML now), and the decisive photo for language is the
   // BACK cover. Enrich lazily — one detail-page fetch per listing, only for
@@ -81,7 +89,7 @@ async function analyzeOneLive(
       "El anuncio no tiene fotos para analizar.",
       nowIso()
     );
-    return;
+    return true;
   }
 
   // NOTE: we no longer skip single-photo (front-only) listings. The front cover
@@ -104,7 +112,7 @@ async function analyzeOneLive(
       nowIso(),
       false
     );
-    return;
+    return true;
   }
   imagesBudget.remaining -= willSend;
 
@@ -121,7 +129,12 @@ async function analyzeOneLive(
       result.platform,
       result.sealed
     );
+    return true;
   } catch (e) {
+    // Nothing was actually analyzed: give the images back to the budget so a
+    // retry of this listing isn't starved by its own failed attempt.
+    imagesBudget.remaining += willSend;
+    if (!finalAttempt) return false;
     // Transient failure (rate limit, overload, image download): do NOT persist,
     // so this listing is retried on the next search instead of being stuck.
     updateListingVerdict(
@@ -133,6 +146,7 @@ async function analyzeOneLive(
       nowIso(),
       false
     );
+    return true;
   }
 }
 
@@ -264,9 +278,23 @@ export async function startAnalysis(searchId: string): Promise<void> {
         Math.max(COST_GUARD.ANALYSIS_CONCURRENCY, config.geminiKeys.length * 2),
         16
       );
-      await runPool(pending, concurrency, (l) =>
-        analyzeOneLive(searchId, l, imagesBudget)
-      );
+      // Gemini overloads come in bursts (503s): a listing that fails now very
+      // often succeeds a few seconds later, typically on the fallback model.
+      // First pass leaves transient failures "pending" (the UI keeps polling);
+      // after a short pause they get ONE final attempt. Before this, a burst
+      // turned ~85 of 118 listings "inconclusive" in a single search.
+      const retry: Listing[] = [];
+      await runPool(pending, concurrency, async (l) => {
+        if (!(await analyzeOneLive(searchId, l, imagesBudget, false))) {
+          retry.push(l);
+        }
+      });
+      if (retry.length > 0) {
+        await sleep(RETRY_PAUSE_MS);
+        await runPool(retry, concurrency, async (l) => {
+          await analyzeOneLive(searchId, l, imagesBudget, true);
+        });
+      }
     }
   } finally {
     active.delete(searchId);
