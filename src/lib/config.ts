@@ -34,7 +34,7 @@ const geminiKeys = (
 
 export const config = {
   geminiKeys,
-  geminiModel: process.env.GEMINI_VISION_MODEL?.trim() || "gemini-flash-lite-latest",
+  geminiModel: process.env.GEMINI_VISION_MODEL?.trim() || "gemini-3.1-flash-lite",
   // Minimum ms between Gemini requests (free tier ~ a handful per minute).
   geminiMinIntervalMs: Number(process.env.GEMINI_MIN_INTERVAL_MS || "4500"),
   // Gemini relay (pal-relay, Render Oregon): Google geo-blocks the free tier

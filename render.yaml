@@ -40,7 +40,7 @@ services:
       - key: ENABLE_WALLAPOP
         value: "true"
       - key: GEMINI_VISION_MODEL
-        value: gemini-flash-lite-latest
+        value: gemini-3.1-flash-lite
       - key: GEMINI_MIN_INTERVAL_MS
         value: "4500"
       - key: WALLAPOP_LAT
