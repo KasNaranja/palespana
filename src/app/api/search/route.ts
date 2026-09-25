@@ -5,12 +5,13 @@ import { createSearch } from "@/lib/db";
 import { getDemoListings } from "@/lib/demo";
 import { cleanListings } from "@/lib/filter";
 import { startAnalysis } from "@/lib/analyzer";
+import { focusedQueryFor, searchDual } from "@/lib/searchPlan";
 import { searchListings as searchVinted, VintedError } from "@/lib/vinted";
 import {
   searchListings as searchWallapop,
   WallapopError,
 } from "@/lib/wallapop";
-import { searchListings as searchEbay, EbayError } from "@/lib/ebay";
+import { searchListingsDual as searchEbayDual, EbayError } from "@/lib/ebay";
 import type {
   ApiError,
   ConsoleKey,
@@ -114,10 +115,18 @@ export async function POST(req: Request) {
     const skip = Promise.resolve<SourceResult>({ listings: [], error: null });
     const ebayEnabled = !!(config.ebayClientId && config.ebayClientSecret);
     const [vintedRes, wallapopRes, ebayRes] = await Promise.all([
+      // Each source runs the DUAL search (focused + plain, merged/deduped);
+      // the merge happens BEFORE cleanListings, which already dedupes,
+      // filters and caps downstream.
       config.vintedEnabled
         ? fetchSource(
             "Vinted",
-            () => searchVinted(query, consoleKey, CAP),
+            () =>
+              searchDual(
+                (q) => searchVinted(q, consoleKey, CAP),
+                query,
+                consoleKey
+              ),
             query,
             consoleKey
           )
@@ -125,7 +134,18 @@ export async function POST(req: Request) {
       config.wallapopEnabled
         ? fetchSource(
             "Wallapop",
-            () => searchWallapop(query, consoleKey, CAP),
+            () =>
+              searchDual(
+                // The PLAIN pass hands "todas" to wallapopKeywords so it falls
+                // back to the generic disambiguator ("mario videojuego")
+                // instead of re-appending the selected console — which would
+                // make the plain pass identical to the focused one and never
+                // recover copies whose title omits the console.
+                (q, focused) =>
+                  searchWallapop(q, focused ? consoleKey : "todas", CAP),
+                query,
+                consoleKey
+              ),
             query,
             consoleKey
           )
@@ -133,7 +153,12 @@ export async function POST(req: Request) {
       ebayEnabled
         ? fetchSource(
             "eBay",
-            () => searchEbay(query, consoleKey, CAP),
+            // eBay runs its dual at the SUMMARY level instead of through
+            // searchDual: the two item_summary/search results are merged and
+            // deduped BEFORE the per-item getItem photo enrichment, so
+            // overlapping results don't pay getItem twice (searchDual would
+            // enrich per pass and double eBay's daily-quota spend).
+            () => searchEbayDual(query, focusedQueryFor(query, consoleKey), CAP),
             query,
             consoleKey
           )

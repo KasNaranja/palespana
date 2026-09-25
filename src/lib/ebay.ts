@@ -153,15 +153,8 @@ async function mapLimit<T, R>(
   return out;
 }
 
-/** Search eBay España. Returns raw (un-deduped, un-filtered) listings, with the
- *  full photo set fetched per item so the back cover is available. */
-export async function searchListings(
-  query: string,
-  _consoleKey: ConsoleKey,
-  perPage: number
-): Promise<Listing[]> {
-  if (!config.ebayClientId || !config.ebayClientSecret) return [];
-
+/** ONE call to item_summary/search. Returns raw summaries, sliced to perPage. */
+async function fetchSummaries(query: string, perPage: number): Promise<any[]> {
   const params = new URLSearchParams();
   params.set("q", query);
   params.set("limit", String(Math.min(perPage, 50)));
@@ -183,15 +176,80 @@ export async function searchListings(
   }
 
   const data: any = await res.json();
-  const summaries: any[] = (data?.itemSummaries ?? []).slice(0, perPage);
+  return (data?.itemSummaries ?? []).slice(0, perPage);
+}
 
-  // Enrich each with its full photo set (back cover) — bounded concurrency.
-  // 12 en paralelo: esta fase alarga la respuesta inicial de la búsqueda (una
-  // llamada getItem por anuncio) y el límite diario de eBay es holgado (5.000).
+/** Enrich summaries with the full photo set (back cover) — bounded concurrency.
+ *  12 en paralelo: esta fase alarga la respuesta inicial de la búsqueda (una
+ *  llamada getItem por anuncio) y el límite diario de eBay es holgado (5.000). */
+async function enrichSummaries(summaries: any[]): Promise<Listing[]> {
   const listings = await mapLimit(summaries, 12, async (s) => {
     const photos = await fetchItemPhotos(s.itemId);
     return summaryToListing(s, photos);
   });
-
   return listings.filter((l): l is Listing => l !== null);
+}
+
+/** Search eBay España. Returns raw (un-deduped, un-filtered) listings, with the
+ *  full photo set fetched per item so the back cover is available. */
+export async function searchListings(
+  query: string,
+  _consoleKey: ConsoleKey,
+  perPage: number
+): Promise<Listing[]> {
+  if (!config.ebayClientId || !config.ebayClientSecret) return [];
+  return enrichSummaries(await fetchSummaries(query, perPage));
+}
+
+/** Dual (console-focused + plain) search, resolved at the SUMMARY level.
+ *
+ *  Going through the API route's generic searchDual would enrich photos per
+ *  pass: every listing found by BOTH queries (typically most of them — "mario
+ *  ps4" vs "mario") would pay its getItem call twice only for the duplicate to
+ *  be thrown away in the dedupe, doubling the daily-quota spend (~51 → ~102
+ *  calls per search) and running two mapLimit(12) pools in parallel (24
+ *  concurrent getItem). Instead: run the 2 cheap item_summary/search calls in
+ *  parallel, merge the summaries deduped by itemId, and enrich the merged set
+ *  ONCE (concurrency stays at 12, one getItem per unique listing).
+ *
+ *  The merge interleaves 1:1 (focused[0], plain[0], …) for the same reason
+ *  searchDual does: downstream fetchSource caps at 25 cleaned listings, and a
+ *  focused-first concat would push out exactly the plain-only items (copies
+ *  whose title never names the console) this dual search exists to recover.
+ *  Error semantics also match searchDual: if one pass fails we use the other;
+ *  if both fail we rethrow the first error. `focusedQuery` null (no console
+ *  chip, or the query already names it) collapses to the plain single search. */
+export async function searchListingsDual(
+  query: string,
+  focusedQuery: string | null,
+  perPage: number
+): Promise<Listing[]> {
+  if (!config.ebayClientId || !config.ebayClientSecret) return [];
+  if (!focusedQuery) return enrichSummaries(await fetchSummaries(query, perPage));
+
+  const [focusedRes, plainRes] = await Promise.allSettled([
+    fetchSummaries(focusedQuery, perPage),
+    fetchSummaries(query, perPage),
+  ]);
+  if (focusedRes.status === "rejected" && plainRes.status === "rejected") {
+    throw focusedRes.reason;
+  }
+  const focused = focusedRes.status === "fulfilled" ? focusedRes.value : [];
+  const plain = plainRes.status === "fulfilled" ? plainRes.value : [];
+
+  const merged: any[] = [];
+  const seen = new Set<string>();
+  const push = (s: any) => {
+    if (!s || s.itemId == null) return; // summaryToListing would drop it anyway
+    const id = String(s.itemId);
+    if (seen.has(id)) return;
+    seen.add(id);
+    merged.push(s);
+  };
+  const longest = Math.max(focused.length, plain.length);
+  for (let i = 0; i < longest; i++) {
+    if (i < focused.length) push(focused[i]);
+    if (i < plain.length) push(plain[i]);
+  }
+  return enrichSummaries(merged);
 }

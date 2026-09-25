@@ -29,7 +29,22 @@ function normalize(s: string): string {
 }
 
 // Words that signal a non-game listing (console, accessory, guide, poster…).
+// Matched as substrings of the normalized (accent-free) title, so avoid words
+// that live inside real game listings — e.g. NOT "libro": "sin libro de
+// instrucciones" is a complete game missing its manual.
 const IRRELEVANT = [
+  "placa",
+  "metal plate",
+  "lamina",
+  "targa",
+  "cartel",
+  "artbook",
+  "art book",
+  "banda sonora",
+  "soundtrack",
+  "vinilo",
+  "comic",
+  "booklet",
   "consola",
   "console",
   "mando",
@@ -84,32 +99,97 @@ function queryTokens(query: string): string[] {
 }
 
 /**
- * A listing is relevant when its title shares enough with the query and does
- * not look like an accessory / guide / empty box. We require the majority of
- * meaningful query tokens to appear in the title (roman numerals & short
- * titles handled by the ratio, not an exact-count rule).
+ * How well a listing's title matches the query:
+ *   2 = STRONG — short queries (1–2 tokens) match every token; longer ones
+ *       match ≥60% of them. (The original, only rule.)
+ *   1 = LOOSE — long queries (≥4 tokens) whose title carries only the HEAD of
+ *       the name (the first two tokens). Users type the full official title,
+ *       sellers write it short: "Dark Souls Scholar of the First Sin" is listed
+ *       as "Dark Souls 2 PS4" (2/5 tokens) — the only Dark Souls 2 on PS4 —
+ *       and the strong rule alone silently dropped it. Loose matches also let
+ *       in some siblings ("Dark Souls III"), so cleanListings ranks them AFTER
+ *       every strong match: they only take slots the strong ones leave free.
+ *   0 = irrelevant (accessory / guide / empty box, or too little in common).
  */
-export function isRelevant(listing: Listing, query: string): boolean {
+export function relevanceTier(listing: Listing, query: string): 0 | 1 | 2 {
   const title = normalize(listing.title);
-  if (!title) return false;
+  if (!title) return 0;
 
   for (const bad of IRRELEVANT) {
     if (title.includes(bad)) {
       // Allow "guia" etc. only if it's clearly part of the game name is rare;
       // safest to drop these to avoid noise.
-      return false;
+      return 0;
     }
   }
 
   const tokens = queryTokens(query);
-  if (tokens.length === 0) return true; // nothing to match against
+  if (tokens.length === 0) return 2; // nothing to match against
 
-  const matched = tokens.filter((t) => title.includes(t)).length;
-  const ratio = matched / tokens.length;
+  const hit = tokens.map((t) => title.includes(t));
+  const matched = hit.filter(Boolean).length;
 
-  // Short queries (1–2 tokens) must match all; longer ones allow one miss.
-  if (tokens.length <= 2) return matched === tokens.length;
-  return ratio >= 0.6;
+  if (tokens.length <= 2) return matched === tokens.length ? 2 : 0;
+  if (matched / tokens.length >= 0.6) return 2;
+  if (tokens.length >= 4 && hit[0] && hit[1]) return 1;
+  return 0;
+}
+
+/** Relevant at any tier (see relevanceTier). */
+export function isRelevant(listing: Listing, query: string): boolean {
+  return relevanceTier(listing, query) > 0;
+}
+
+// Sequel numbers as whole tokens of a NORMALIZED title ("ps4" is one token,
+// so the 4 inside it never counts). Roman numerals map to digits.
+const ROMAN: Record<string, string> = {
+  ii: "2", iii: "3", iv: "4", v: "5", vi: "6", vii: "7", viii: "8", ix: "9",
+};
+function sequelNumbers(normalized: string): Set<string> {
+  const out = new Set<string>();
+  for (const tok of normalized.split(" ")) {
+    if (/^[2-9]$/.test(tok)) out.add(tok);
+    else if (ROMAN[tok]) out.add(ROMAN[tok]);
+  }
+  return out;
+}
+
+/**
+ * Which sequel number the searched game carries, learned from the data: the
+ * query's own number if it has one, otherwise the number most STRONG matches
+ * agree on ("Dark Souls II Scholar…" listings ⇒ "2"). null = the game has no
+ * sequel number (strong matches don't agree on one).
+ */
+function targetSequel(query: string, strong: Listing[]): string | null {
+  const fromQuery = sequelNumbers(normalize(query));
+  if (fromQuery.size > 0) return [...fromQuery][0];
+  const counts = new Map<string, number>();
+  for (const l of strong) {
+    for (const n of sequelNumbers(normalize(l.title))) {
+      counts.set(n, (counts.get(n) ?? 0) + 1);
+    }
+  }
+  let best: string | null = null;
+  let bestCount = 0;
+  for (const [n, c] of counts) {
+    if (c > bestCount) {
+      best = n;
+      bestCount = c;
+    }
+  }
+  return best && bestCount >= Math.max(2, strong.length * 0.25) ? best : null;
+}
+
+/**
+ * A LOOSE match only shares the franchise head with the query, so it may be a
+ * sibling game. Keep it only when its sequel number agrees with the target:
+ * with target "2", "Dark Souls 2 PS4" stays while "Dark Souls III" and
+ * "Dark Souls Trilogy" go; with no target, a loose title that DOES carry a
+ * number is a sequel of a numberless game and goes.
+ */
+function looseMatchesSequel(listing: Listing, target: string | null): boolean {
+  const nums = sequelNumbers(normalize(listing.title));
+  return target ? nums.has(target) : nums.size === 0;
 }
 
 // ── Console filtering ──────────────────────────────────────────
@@ -254,7 +334,18 @@ export function cleanListings(
   query: string,
   consoleKey: ConsoleKey = "todas"
 ): Listing[] {
-  return dedupe(listings)
-    .filter((l) => isRelevant(l, query))
-    .filter((l) => consoleAllows(l.title, consoleKey));
+  const scored = dedupe(listings)
+    .map((l) => ({ l, tier: relevanceTier(l, query) }))
+    .filter(({ l, tier }) => tier > 0 && consoleAllows(l.title, consoleKey));
+  const target = targetSequel(
+    query,
+    scored.filter((s) => s.tier === 2).map((s) => s.l)
+  );
+  // Strong matches first, loose ones after (stable sort keeps each tier in the
+  // order the sources returned it, i.e. the dual search's interleave), so the
+  // per-source cap trims loose matches before any strong one.
+  return scored
+    .filter(({ l, tier }) => tier === 2 || looseMatchesSequel(l, target))
+    .sort((a, b) => b.tier - a.tier)
+    .map(({ l }) => l);
 }

@@ -47,6 +47,10 @@ const CONSOLE_TERMS: Partial<Record<ConsoleKey, string>> = {
   ps5: "PS5",
   switch: "Switch",
   xbox: "Xbox",
+  // Matches the route's CONSOLE_FOCUS_TERM so a console-focused dual-search
+  // pass ("mario nintendo ds") passes through untouched instead of getting
+  // "videojuego" appended on top of the focus term.
+  nintendo_handheld: "Nintendo DS",
 };
 
 function wallapopKeywords(query: string, consoleKey: ConsoleKey): string {

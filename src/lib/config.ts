@@ -5,13 +5,20 @@
 
 export const COST_GUARD = {
   /** Hard cap on how many listings are fetched/analyzed per search, PER SOURCE
-   *  (Vinted and Wallapop each). Kept at 25 because Gemini's FREE tier allows
-   *  only ~500 requests/day and each listing = 1 request; 25×2 sources = 50 per
-   *  search means ~10 full searches/day fit the free quota. */
-  MAX_LISTINGS_PER_SEARCH: 25,
-  /** Hard cap on total images per search across all sources (only a sanity
-   *  bound; the daily quota counts REQUESTS, not images). 2×25×3 = 150. */
-  MAX_IMAGES_PER_SEARCH: 150,
+   *  (Vinted, Wallapop and eBay each). Each listing = 1 Gemini request; the
+   *  free tier gives ~500 requests/day PER PROJECT, and with 10 keys (10
+   *  projects) that's ~5.000/day → 50×3 = 150 per search ≈ 33 full searches a
+   *  day. Raised from 25 once the dual console search and loose relevance
+   *  tier started finding more genuine copies than 25 slots could hold (e.g.
+   *  44 real copies on Vinted alone for "dark souls scholar of the first sin"). */
+  MAX_LISTINGS_PER_SEARCH: 50,
+  /** Hard cap on total images per search across all sources (a sanity bound;
+   *  the daily quota counts REQUESTS, not images). MUST cover every listing's
+   *  full photo set: 3 sources × 50 × 3 = 450. When it was 150 (sized for 2
+   *  sources × 25) the eBay era silently left the priciest ~25 listings of
+   *  each search unanalyzed — "inconclusive", hence hidden by "Solo en
+   *  español". */
+  MAX_IMAGES_PER_SEARCH: 450,
   /** Max images sent per individual listing: front + back + a fallback back. */
   MAX_IMAGES_PER_LISTING: 3,
   /** How many listings to analyze concurrently. Low, because the Gemini free

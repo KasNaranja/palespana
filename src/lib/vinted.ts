@@ -81,61 +81,80 @@ function mergeSetCookies(header: Headers) {
     .join("; ");
 }
 
+// Cold-start lock: the dual search fires two htmlGet calls together, and with
+// an empty (or TTL-expired) jar both would enter the bootstrap at once — two
+// simultaneous homepage GETs with the same datadome (a burst pattern for
+// DataDome) whose set-cookie responses mergeSetCookies could interleave into a
+// jar mixing two different anonymous sessions. Concurrent callers join the
+// bootstrap already in flight instead; only a FORCE re-bootstrap (the 401/403
+// retry path, where the current session is known-bad) starts its own.
+let bootstrapInFlight: Promise<void> | null = null;
+
 async function bootstrapSession(force = false): Promise<void> {
   const datadome = getDatadomeCookie();
   const fresh = Date.now() - cookieFetchedAt < COOKIE_TTL_MS;
   // A "fresh" session is still stale if the stored datadome changed since the
   // last bootstrap (a new cookie just arrived): re-bootstrap with it right away.
   if (cookieJar && fresh && !force && datadome === bootstrapDatadome) return;
+  if (bootstrapInFlight && !force) return bootstrapInFlight;
 
-  // The stored datadome changed since the last bootstrap: purge the jar's old
-  // datadome copy (a rotation of the PREVIOUS value) so it cannot shadow the
-  // new one in htmlGet. If this response rotates the new value, mergeSetCookies
-  // below re-adds the rotation; otherwise htmlGet appends the stored value.
-  if (cookieJar && datadome !== bootstrapDatadome) {
-    cookieJar = cookieJar
-      .split("; ")
-      .filter((kv) => !kv.startsWith("datadome="))
-      .join("; ");
-  }
+  const run = (async () => {
+    // The stored datadome changed since the last bootstrap: purge the jar's old
+    // datadome copy (a rotation of the PREVIOUS value) so it cannot shadow the
+    // new one in htmlGet. If this response rotates the new value, mergeSetCookies
+    // below re-adds the rotation; otherwise htmlGet appends the stored value.
+    if (cookieJar && datadome !== bootstrapDatadome) {
+      cookieJar = cookieJar
+        .split("; ")
+        .filter((kv) => !kv.startsWith("datadome="))
+        .join("; ");
+    }
 
-  // Presenting a valid datadome cookie on the homepage request keeps DataDome
-  // happy on datacenter IPs and makes Vinted hand out the anonymous session
-  // cookies (access_token_web etc.) via set-cookie.
-  const headers: Record<string, string> = {
-    "User-Agent": UA,
-    Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "es-ES,es;q=0.9",
-  };
-  if (datadome) headers.Cookie = `datadome=${datadome}`;
+    // Presenting a valid datadome cookie on the homepage request keeps DataDome
+    // happy on datacenter IPs and makes Vinted hand out the anonymous session
+    // cookies (access_token_web etc.) via set-cookie.
+    const headers: Record<string, string> = {
+      "User-Agent": UA,
+      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      "Accept-Language": "es-ES,es;q=0.9",
+    };
+    if (datadome) headers.Cookie = `datadome=${datadome}`;
 
-  let res: Response;
+    let res: Response;
+    try {
+      res = await fetch(base() + "/", {
+        headers,
+        redirect: "follow",
+      });
+    } catch (e) {
+      throw new VintedError(
+        "unavailable",
+        `No se pudo contactar con Vinted: ${(e as Error).message}`
+      );
+    }
+    if (res.status === 403 || res.status === 429) {
+      throw new VintedError(
+        res.status === 429 ? "rate_limited" : "blocked",
+        `Vinted respondió ${res.status} al iniciar sesión anónima.`,
+        res.status
+      );
+    }
+    mergeSetCookies(res.headers);
+    cookieFetchedAt = Date.now();
+    bootstrapDatadome = datadome;
+    if (!cookieJar) {
+      throw new VintedError(
+        "blocked",
+        "Vinted no entregó cookies de sesión (posible bloqueo)."
+      );
+    }
+  })();
+  bootstrapInFlight = run;
   try {
-    res = await fetch(base() + "/", {
-      headers,
-      redirect: "follow",
-    });
-  } catch (e) {
-    throw new VintedError(
-      "unavailable",
-      `No se pudo contactar con Vinted: ${(e as Error).message}`
-    );
-  }
-  if (res.status === 403 || res.status === 429) {
-    throw new VintedError(
-      res.status === 429 ? "rate_limited" : "blocked",
-      `Vinted respondió ${res.status} al iniciar sesión anónima.`,
-      res.status
-    );
-  }
-  mergeSetCookies(res.headers);
-  cookieFetchedAt = Date.now();
-  bootstrapDatadome = datadome;
-  if (!cookieJar) {
-    throw new VintedError(
-      "blocked",
-      "Vinted no entregó cookies de sesión (posible bloqueo)."
-    );
+    await run;
+  } finally {
+    // Guard against a FORCE bootstrap having replaced the slot meanwhile.
+    if (bootstrapInFlight === run) bootstrapInFlight = null;
   }
 }
 
@@ -324,9 +343,11 @@ export async function searchListings(
   const catalogIds = CONSOLE_CATALOG_IDS[consoleKey];
   if (catalogIds?.length) params.set("catalog_ids", catalogIds.join(","));
 
-  // The SSR catalog page carries ~95 cards (no per_page control). That's ~2×
-  // the analysis pool, which is exactly what we want: enough depth for the
-  // relevance filter, capped below so noisy queries don't flood downstream.
+  // The SSR catalog page carries ~95 cards (no per_page control). We return
+  // ALL of them: parsing is cheap, and the route's relevance filter + per-source
+  // cap decide what reaches analysis. (Trimming to 48 here threw away half the
+  // page before the filter ever saw it — real copies ranked 49-96 by Vinted
+  // were invisible.)
   const html = await htmlGet(`/catalog?${params.toString()}`);
   const all = parseCatalogCards(html);
   if (all.length === 0 && !/\/items\/\d+-/.test(html)) {
@@ -341,7 +362,7 @@ export async function searchListings(
       );
     }
   }
-  return all.slice(0, Math.max(perPage, 48));
+  return all;
 }
 
 // Detail pages are ~2MB of HTML each, so keep a small cap on how many we fetch
