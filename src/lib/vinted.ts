@@ -229,16 +229,22 @@ function parsePriceEur(s: string): number | null {
  * the same card markup (between this anchor and the next one).
  */
 function parseCatalogCards(html: string): Listing[] {
-  type RawCard = { id: string; path: string; attr: string; at: number };
+  type RawCard = { id: string; path: string; attr: string; at: number; rawIdx: number };
   const cards: RawCard[] = [];
+  // Positions of EVERY titled anchor (duplicates included): they are the card
+  // boundaries for thumb pairing, even when a duplicate id is dropped below.
+  const rawAnchorAts: number[] = [];
   const seen = new Set<string>();
   const anchorRe =
     /href="(?:https?:\/\/[^"/]+)?(\/items\/(\d+)-[^"?]*)[^"]*"[^>]*\btitle="([^"]+)"/g;
   for (const m of html.matchAll(anchorRe)) {
     const id = m[2];
+    const at = m.index ?? 0;
+    const rawIdx = rawAnchorAts.length;
+    rawAnchorAts.push(at);
     if (seen.has(id)) continue;
     seen.add(id);
-    cards.push({ id, path: m[1], attr: m[3], at: m.index ?? 0 });
+    cards.push({ id, path: m[1], attr: m[3], at, rawIdx });
   }
 
   const listings: Listing[] = [];
@@ -259,11 +265,23 @@ function parseCatalogCards(html: string): Listing[] {
     const price = parsePriceEur(m[2]);
     if (!title || price == null) continue;
 
-    // Thumb: first vinted.net image between this anchor and the next card.
-    const segEnd = i + 1 < cards.length ? cards[i + 1].at : c.at + 6000;
-    const seg = html.slice(c.at, segEnd);
-    const img = seg.match(/src="(https:\/\/images1\.vinted\.net\/[^"]+)"/);
-    const thumbUrl = img ? decodeEntities(img[1]) : null;
+    // Thumb: in Vinted's card markup the item photo comes BEFORE the titled
+    // anchor, so each card's image is the LAST vinted.net image between the
+    // PREVIOUS titled anchor and this one. (Pairing it with the image AFTER
+    // the anchor silently shifted every thumbnail by one listing — verified
+    // against the detail galleries: 0/8 right the old way, 8/8 this way.)
+    const segStart =
+      c.rawIdx > 0 ? rawAnchorAts[c.rawIdx - 1] : Math.max(0, c.at - 8000);
+    const seg = html.slice(segStart, c.at);
+    const imgs = [
+      ...seg.matchAll(/src="(https:\/\/images1\.vinted\.net\/[^"]+)"/g),
+    ];
+    // Prefer the catalog thumb size (310x430) in case other images (avatars,
+    // promoted blocks) ever share the segment; otherwise take the last one.
+    const preferred =
+      [...imgs].reverse().find((m) => m[1].includes("/310x430/")) ??
+      imgs[imgs.length - 1];
+    const thumbUrl = preferred ? decodeEntities(preferred[1]) : null;
 
     listings.push({
       source: "vinted",
