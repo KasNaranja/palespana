@@ -100,13 +100,31 @@ const PHOTO_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const PHOTO_CACHE_MAX = 3000;
 const photoCache = new Map<string, { at: number; urls: string[] }>();
 
-/** getItem gives the full photo set (primary + additionalImages). */
+// getItem outcomes, for /api/health: in production 17 of 50 eBay listings of
+// one search arrived with a single photo although the listing had more, and
+// those ended "inconclusive" — the calls were failing silently.
+const itemStats = { ok: 0, fail: 0, lastFailStatus: 0 };
+export function getEbayItemStats() {
+  return { ...itemStats };
+}
+
+/** getItem gives the full photo set (primary + additionalImages). One retry
+ *  after a pause on a 429 or 5xx (eBay throttles bursts). */
 async function fetchItemPhotos(itemId: string): Promise<string[]> {
   const hit = photoCache.get(itemId);
   if (hit && Date.now() - hit.at < PHOTO_CACHE_TTL_MS) return hit.urls;
   try {
-    const res = await ebayGet(ITEM_URL + encodeURIComponent(itemId));
-    if (!res.ok) return [];
+    let res = await ebayGet(ITEM_URL + encodeURIComponent(itemId));
+    if (res.status === 429 || res.status >= 500) {
+      await new Promise((r) => setTimeout(r, 1500));
+      res = await ebayGet(ITEM_URL + encodeURIComponent(itemId));
+    }
+    if (!res.ok) {
+      itemStats.fail++;
+      itemStats.lastFailStatus = res.status;
+      return [];
+    }
+    itemStats.ok++;
     const item: any = await res.json();
     const urls: string[] = [];
     if (item?.image?.imageUrl) urls.push(item.image.imageUrl);
@@ -133,6 +151,12 @@ function summaryToListing(s: any, photos: string[]): Listing | null {
 
   const main: string | null =
     s.image?.imageUrl || s.thumbnailImages?.[0]?.imageUrl || null;
+  // If getItem failed, the search summary's own additionalImages (when eBay
+  // includes them) still beat a lone main photo.
+  const fromSummary = [
+    main,
+    ...((s.additionalImages ?? []) as any[]).map((a) => a?.imageUrl),
+  ].filter((u): u is string => typeof u === "string" && !!u);
 
   return {
     source: "ebay",
@@ -141,10 +165,17 @@ function summaryToListing(s: any, photos: string[]): Listing | null {
     price: amount,
     shippingPrice: null, // could be parsed from shippingOptions; unknown up front
     currency: s.price?.currency || "EUR",
-    photoUrls: photos.length ? photos : main ? [main] : [],
+    photoUrls: photos.length ? photos : fromSummary,
     thumbUrl: main,
     listingUrl: s.itemWebUrl || `https://www.ebay.es/itm/${s.legacyItemId ?? ""}`,
     sellerCountry: s.itemLocation?.country || null,
+    // eBay conditionId: 1000 new, 1500/1750 new other / with defects,
+    // 2000-2500 refurbished, 2750+ used (like new, very good, good…).
+    sellerCondition: (() => {
+      const id = Number(s.conditionId);
+      if (!Number.isFinite(id) || id <= 0) return null;
+      return id === 1000 ? "new" : id >= 2000 ? "used" : null;
+    })(),
     languageVerdict: "pending",
     verdictEvidence: null,
     analyzedAt: null,
@@ -208,7 +239,7 @@ async function fetchSummaries(
  *  12 en paralelo: esta fase alarga la respuesta inicial de la búsqueda (una
  *  llamada getItem por anuncio) y el límite diario de eBay es holgado (5.000). */
 async function enrichSummaries(summaries: any[]): Promise<Listing[]> {
-  const listings = await mapLimit(summaries, 12, async (s) => {
+  const listings = await mapLimit(summaries, 6, async (s) => {
     const photos = await fetchItemPhotos(s.itemId);
     return summaryToListing(s, photos);
   });

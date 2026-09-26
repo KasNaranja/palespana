@@ -95,6 +95,14 @@ async function analyzeOneLive(
 
   try {
     const result = await analyzeImages(chosen.slice(0, willSend));
+    // The seller's own declared condition overrules a "sealed" read from the
+    // photos: a real listing marked "Muy bueno" (used) came out sealed because
+    // the model took the clear sleeve every PS4 case has over its cover art
+    // for factory shrink-wrap.
+    if (result.sealed === "yes" && listing.sellerCondition === "used") {
+      result.sealed = "no";
+      result.evidence = `${result.evidence.replace(/;[^;]*precintado[^;]*\.?$/, "")}; el vendedor lo declara usado, así que no puede estar precintado.`;
+    }
     updateListingVerdict(
       searchId,
       listing.source,

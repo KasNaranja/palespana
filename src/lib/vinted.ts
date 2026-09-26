@@ -297,14 +297,22 @@ function parseCatalogCards(html: string): Listing[] {
     // so commas inside the title never break the split. The first price is the
     // item price, the second is Vinted's price with buyer protection.
     const m = attr.match(
-      /^(.*?)(?:, Marca: .{0,120}?)?, Estado: [^,]{0,80}, ([\d.,]+) €, [\d.,]+ €$/
+      /^(.*?)(?:, Marca: .{0,120}?)?, Estado: ([^,]{0,80}), ([\d.,]+) €, [\d.,]+ €$/
     );
     // Cards without the trailing prices (rare/ads) are dropped: a Listing
     // without a price can't be ranked or displayed.
     if (!m) continue;
     const title = m[1].trim();
-    const price = parsePriceEur(m[2]);
+    const price = parsePriceEur(m[3]);
     if (!title || price == null) continue;
+    // Vinted's conditions: "Nuevo con etiquetas", "Nuevo sin etiquetas" (new)
+    // and "Muy bueno", "Bueno", "Satisfactorio" (used).
+    const estado = m[2].trim().toLowerCase();
+    const sellerCondition = estado.startsWith("nuevo")
+      ? ("new" as const)
+      : /^(muy bueno|bueno|satisfactorio)$/.test(estado)
+        ? ("used" as const)
+        : null;
 
     // Thumb: in Vinted's card markup the item photo comes BEFORE the titled
     // anchor, so each card's image is the LAST vinted.net image between the
@@ -338,6 +346,7 @@ function parseCatalogCards(html: string): Listing[] {
       thumbUrl,
       listingUrl: base() + c.path,
       sellerCountry: null, // not present in the card markup
+      sellerCondition,
       languageVerdict: "pending",
       verdictEvidence: null,
       analyzedAt: null,

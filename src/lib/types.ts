@@ -94,6 +94,11 @@ export interface Listing {
   thumbUrl: string | null; // small image for the card grid (fast on mobile)
   listingUrl: string;
   sellerCountry: string | null; // ISO-2 code, e.g. "ES", "FR"
+  // Condition the SELLER declared on the marketplace ("used" = Vinted "Muy
+  // bueno/Bueno/Satisfactorio", eBay used/refurbished). A copy declared used
+  // can't be factory-sealed, whatever the photos seem to show. null = unknown
+  // (Wallapop search results don't carry it).
+  sellerCondition?: "new" | "used" | null;
   languageVerdict: LanguageVerdict;
   verdictEvidence: string | null; // one sentence in Spanish
   detectedPlatform?: DetectedPlatform; // console read from the box art by the AI

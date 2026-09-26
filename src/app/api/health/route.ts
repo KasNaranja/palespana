@@ -3,6 +3,7 @@ import { config, COST_GUARD, isDemoMode } from "@/lib/config";
 import { getKeyStats, getVisionStats } from "@/lib/vision";
 import { getDatadomeStatus } from "@/lib/vintedCookie";
 import { getRuntimeStats } from "@/lib/runtimeStats";
+import { getEbayItemStats } from "@/lib/ebay";
 
 export const dynamic = "force-dynamic";
 
@@ -31,6 +32,8 @@ export async function GET() {
     // Uptime + memory (peak included): tells a restart / out-of-memory kill
     // apart from a normal sleep after inactivity.
     runtime: getRuntimeStats(),
+    // eBay per-listing photo calls (getItem): failures leave a single photo.
+    ebayItems: getEbayItemStats(),
     cacheEnabled: config.cacheEnabled,
     maxListingsPerSource: COST_GUARD.MAX_LISTINGS_PER_SEARCH,
     sources: {
