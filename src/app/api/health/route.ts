@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { config, COST_GUARD, isDemoMode } from "@/lib/config";
 import { getKeyStats, getVisionStats } from "@/lib/vision";
 import { getDatadomeStatus } from "@/lib/vintedCookie";
+import { getRuntimeStats } from "@/lib/runtimeStats";
 
 export const dynamic = "force-dynamic";
 
@@ -27,6 +28,9 @@ export async function GET() {
     // DataDome cookie health: present? how old? when did it last work?
     // Only metadata — the value itself is never exposed.
     vintedCookie: getDatadomeStatus(),
+    // Uptime + memory (peak included): tells a restart / out-of-memory kill
+    // apart from a normal sleep after inactivity.
+    runtime: getRuntimeStats(),
     cacheEnabled: config.cacheEnabled,
     maxListingsPerSource: COST_GUARD.MAX_LISTINGS_PER_SEARCH,
     sources: {

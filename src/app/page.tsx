@@ -79,13 +79,34 @@ export default function Home() {
     queryFn: () => getStatus(active!.id),
     enabled: !!active && active.total > 0,
     refetchInterval: (q) => (q.state.data?.done ? false : 1500),
+    // A 404 means the server lost the search (see the effect below): retrying
+    // the same id can never succeed, so surface it at once.
+    retry: (count, err) =>
+      !(err instanceof CazaApiError && err.status === 404) && count < 3,
   });
+
+  // Searches live in the server's memory. When Render restarts the instance
+  // (free tier: sleep after inactivity, crash, redeploy) mid-analysis, /status
+  // answers 404 forever and the screen froze at "0 de N". Re-run the same
+  // search instead, keeping the user's filters. Capped per user search so a
+  // server that keeps restarting can't loop us.
+  const autoResumes = useRef(0);
+  useEffect(() => {
+    const err = status.error;
+    if (!(err instanceof CazaApiError) || err.status !== 404) return;
+    if (!lastSubmit.current || search.isPending || autoResumes.current >= 2) {
+      return;
+    }
+    autoResumes.current += 1;
+    search.mutate(lastSubmit.current);
+  }, [status.error, search]);
 
   const submit = useCallback(
     (q: string, c: ConsoleKey) => {
       const trimmed = q.trim();
       if (!trimmed) return;
       lastSubmit.current = { q: trimmed, c };
+      autoResumes.current = 0;
       setActive(null);
       setSoloEspanol(false); // always unchecked after a new search
       setPrecintados(false);

@@ -6,6 +6,7 @@ import { getDemoListings } from "@/lib/demo";
 import { cleanListings } from "@/lib/filter";
 import { startAnalysis } from "@/lib/analyzer";
 import { focusedQueryFor, searchDual } from "@/lib/searchPlan";
+import { ensureRuntimeSampler } from "@/lib/runtimeStats";
 import { searchListings as searchVinted, VintedError } from "@/lib/vinted";
 import {
   searchListings as searchWallapop,
@@ -76,6 +77,7 @@ async function fetchSource(
 }
 
 export async function POST(req: Request) {
+  ensureRuntimeSampler();
   let body: { query?: string; console?: string };
   try {
     body = await req.json();
