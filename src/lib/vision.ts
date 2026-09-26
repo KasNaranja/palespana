@@ -384,12 +384,13 @@ export async function analyzeImages(imageUrls: string[]): Promise<VisionResult> 
       }
       if (r.status === 429) {
         const detail = await r.text().catch(() => "");
-        const metrics = detail.match(/quotaMetric"?:s*"([^"]+)"/g);
-        if (metrics) {
-          stats.last429Metrics = Array.from(
-            new Set(metrics.map((m) => m.replace(/.*"([^"]+)"$/, "$1").split("/").pop() || ""))
-          ).join(",");
-        }
+        const quotaIds = Array.from(
+          new Set(Array.from(detail.matchAll(/"quotaId"\s*:\s*"([^"]+)"/g), (m) => m[1]))
+        );
+        const message = detail.match(/"message"\s*:\s*"([^"]{0,160})/)?.[1] ?? "";
+        stats.last429Metrics = quotaIds.length
+          ? quotaIds.join(",")
+          : `(sin cuota) ${message}`;
         // Gemini responde RESOURCE_EXHAUSTED tanto para el límite POR MINUTO como
         // para el DIARIO, así que NO se puede usar ese código para decidir. Solo
         // la cuota DIARIA (métrica "...PerDay...") justifica aparcar la clave 30
