@@ -365,13 +365,30 @@ export async function searchListings(
   return all;
 }
 
-// Detail pages are ~2MB of HTML each, so keep a small cap on how many we fetch
-// at once: the analyzer may run 16 listings in parallel, and 16 simultaneous
-// 2MB downloads would spike memory on Render's 512MB instance (and look like a
-// bot burst to DataDome).
+// ── Item pages (photo galleries), paced to Vinted's rate limit ──
+// Vinted answers 429 "You are rate limited" after ~15 page requests in a row
+// from one IP and then blocks for ~50s (measured: 15 OK then 429; 1 request
+// every 1.5s still gets blocked). Firing gallery fetches unpaced made ~45% of
+// them fail, so those listings were analyzed from the front cover alone.
+//
+// Vinted counts requests in any 60s window, so item pages go through a
+// SLIDING-window limiter kept below that (a token bucket let the initial
+// burst plus its refills exceed 15 within the first minute and got blocked).
+// The headroom is for catalog searches, which are not paced here: a block
+// would also make every new search fail on Vinted for ~50s. Small concurrency
+// cap too (pages are ~2MB each on a 512MB instance). On a 429 anyway, every
+// caller waits out the block and retries once.
+const DETAIL_MAX_CONCURRENT = 2;
+const DETAIL_WINDOW_MS = 60_000;
+const DETAIL_PER_WINDOW = 11; // + a search's 2 catalog pages stays under 15
+const DETAIL_BLOCK_MS = 50_000;
+
 let detailInFlight = 0;
 const detailWaiters: Array<() => void> = [];
-const DETAIL_MAX_CONCURRENT = 3;
+const detailRecent: number[] = []; // start times of item-page requests
+let detailBlockedUntil = 0;
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 async function acquireDetailSlot(): Promise<void> {
   if (detailInFlight < DETAIL_MAX_CONCURRENT) {
@@ -388,33 +405,80 @@ function releaseDetailSlot(): void {
   if (next) next();
 }
 
+/** Wait until Vinted isn't blocking us and the last-60s window has room.
+ *  Only called while holding a slot, so at most DETAIL_MAX_CONCURRENT
+ *  callers wait here and they take turns. */
+async function acquireDetailToken(): Promise<void> {
+  for (;;) {
+    const now = Date.now();
+    if (now < detailBlockedUntil) {
+      await sleep(detailBlockedUntil - now);
+      continue;
+    }
+    while (detailRecent.length && now - detailRecent[0] >= DETAIL_WINDOW_MS) {
+      detailRecent.shift();
+    }
+    if (detailRecent.length < DETAIL_PER_WINDOW) {
+      detailRecent.push(now);
+      return;
+    }
+    await sleep(detailRecent[0] + DETAIL_WINDOW_MS - now + 50);
+  }
+}
+
+function extractGallery(html: string): string[] {
+  // Gallery photos render as f800 (full-size) image URLs, in document order
+  // (front first). Thumbs/avatars use other size segments, so f800 alone
+  // selects exactly the gallery.
+  const urls: string[] = [];
+  const seen = new Set<string>();
+  for (const m of html.matchAll(
+    /https:\/\/images1\.vinted\.net\/t[^"'\ )]+\/f800\/[^"'\ )]+/g
+  )) {
+    const u = decodeEntities(m[0]);
+    if (!seen.has(u)) {
+      seen.add(u);
+      urls.push(u);
+    }
+  }
+  return urls;
+}
+
 /**
- * Fetch the full photo set for one listing from its SSR detail page (the
+ * Fetch the full photo set for one listing from its SSR item page (the
  * catalog card only shows the front cover; the gallery has the back cover —
  * the decisive photo for language detection). /items/{id} without the slug
  * redirects to the canonical URL. Returns [] on failure so the analyzer can
  * degrade to the front cover it already has.
+ *
+ * `stillWanted` is checked right before each request: when the search is no
+ * longer watched, a queued fetch gives up instead of spending Vinted's rate
+ * budget on it.
  */
-export async function fetchListingPhotos(vintedId: string): Promise<string[]> {
+export async function fetchListingPhotos(
+  vintedId: string,
+  stillWanted: () => boolean = () => true
+): Promise<string[]> {
   await acquireDetailSlot();
   try {
-    const html = await htmlGet(`/items/${vintedId}`);
-    // Gallery photos render as f800 (full-size) image URLs, in document order
-    // (front first). Thumbs/avatars use other size segments, so f800 alone
-    // selects exactly the gallery.
-    const urls: string[] = [];
-    const seen = new Set<string>();
-    for (const m of html.matchAll(
-      /https:\/\/images1\.vinted\.net\/t[^"'\\ )]+\/f800\/[^"'\\ )]+/g
-    )) {
-      const u = decodeEntities(m[0]);
-      if (!seen.has(u)) {
-        seen.add(u);
-        urls.push(u);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      if (!stillWanted()) return [];
+      await acquireDetailToken();
+      if (!stillWanted()) return [];
+      try {
+        return extractGallery(await htmlGet(`/items/${vintedId}`));
+      } catch (e) {
+        if (e instanceof VintedError && e.kind === "rate_limited") {
+          detailBlockedUntil = Math.max(
+            detailBlockedUntil,
+            Date.now() + DETAIL_BLOCK_MS
+          );
+          detailRecent.length = 0; // the block resets Vinted's window too
+          continue; // wait out the block (acquireDetailToken) and retry once
+        }
+        return [];
       }
     }
-    return urls;
-  } catch {
     return [];
   } finally {
     releaseDetailSlot();

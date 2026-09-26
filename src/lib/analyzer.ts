@@ -66,22 +66,10 @@ function selectPhotos(all: string[]): string[] {
 async function analyzeOneLive(
   searchId: string,
   listing: Listing,
+  photos: string[],
   imagesBudget: { remaining: number },
   finalAttempt: boolean
 ): Promise<boolean> {
-  // Vinted's catalog card only carries the front cover (their JSON API is
-  // gone; we scrape SSR HTML now), and the decisive photo for language is the
-  // BACK cover. Enrich lazily — one detail-page fetch per listing, only for
-  // listings that reach analysis, throttled inside fetchListingPhotos. On
-  // failure we fall back to the front cover we already have.
-  let photos = listing.photoUrls;
-  if (listing.source === "vinted" && photos.length <= 1) {
-    const detailStart = Date.now();
-    const gallery = await fetchListingPhotos(listing.vintedId);
-    notePhase("detail", detailStart, gallery.length === 0);
-    if (gallery.length > photos.length) photos = gallery;
-  }
-
   // No photos at all → genuinely nothing to analyze.
   if (photos.length === 0) {
     updateListingVerdict(
@@ -182,6 +170,57 @@ async function analyzeOneDemo(
       nowIso()
     );
   }
+}
+
+interface Gallery {
+  done: boolean;
+  photos: string[];
+  promise: Promise<void>;
+}
+
+function listingKey(l: Listing): string {
+  return `${l.source}:${l.vintedId}`;
+}
+
+/**
+ * Like runPool, but each worker takes the CHEAPEST listing that is ready to
+ * analyze — one without a pending gallery — instead of blocking on the next
+ * in line while its Vinted gallery is still queued behind Vinted's rate
+ * limit. When only gallery-waiting listings remain, workers wait for the next
+ * gallery to land. Workers stop as soon as nobody watches the search.
+ */
+async function runReadyFirst(
+  items: Listing[],
+  concurrency: number,
+  galleries: Map<string, Gallery>,
+  watched: () => boolean,
+  worker: (item: Listing) => Promise<void>
+): Promise<void> {
+  const queue = [...items];
+  const isReady = (l: Listing) => galleries.get(listingKey(l))?.done ?? true;
+  const takeNext = async (): Promise<Listing | null> => {
+    for (;;) {
+      if (queue.length === 0) return null;
+      const idx = queue.findIndex(isReady);
+      if (idx >= 0) return queue.splice(idx, 1)[0];
+      await Promise.race(
+        queue.map((l) => galleries.get(listingKey(l))!.promise)
+      );
+    }
+  };
+  const runners = Array.from(
+    { length: Math.min(concurrency, queue.length) },
+    async () => {
+      for (;;) {
+        if (!watched()) return;
+        const l = await takeNext();
+        // takeNext may have waited on galleries: re-check before analyzing.
+        if (!l || !watched()) return;
+        await worker(l);
+      }
+    }
+  );
+  await Promise.all(runners);
 }
 
 async function runPool<T>(
@@ -292,18 +331,44 @@ export async function startAnalysis(searchId: string): Promise<void> {
       // leaving the rest "pending", instead of eating Gemini throughput and
       // quota from the searches people ARE looking at. A later status poll
       // restarts analysis over whatever is still pending.
+      const watched = () => isSearchWatched(searchId);
+
+      // Vinted cards only carry the front cover; the decisive BACK cover is in
+      // the item page, which Vinted rate-limits (~15 pages/min per IP). All
+      // galleries are requested up front, in price order, and fetchListingPhotos
+      // paces them. Meanwhile the pool below analyzes whatever is READY:
+      // Wallapop/eBay listings (full photo sets from their APIs) and Vinted
+      // listings whose gallery arrived. Before, a Vinted listing was only
+      // fetched when a worker reached it, and the unpaced burst got ~45% of
+      // pages rejected — those listings were judged on the front cover alone.
+      const galleries = new Map<string, Gallery>();
+      for (const l of pending) {
+        if (l.source !== "vinted" || l.photoUrls.length > 1) continue;
+        const startedAt = Date.now();
+        const g: Gallery = { done: false, photos: [], promise: Promise.resolve() };
+        g.promise = fetchListingPhotos(l.vintedId, watched).then((photos) => {
+          notePhase("detail", startedAt, photos.length === 0);
+          g.photos = photos;
+          g.done = true;
+        });
+        galleries.set(listingKey(l), g);
+      }
+      const photosFor = (l: Listing): string[] => {
+        const g = galleries.get(listingKey(l));
+        return g && g.photos.length > l.photoUrls.length ? g.photos : l.photoUrls;
+      };
+
       const retry: Listing[] = [];
-      await runPool(pending, concurrency, async (l) => {
-        if (!isSearchWatched(searchId)) return;
-        if (!(await analyzeOneLive(searchId, l, imagesBudget, false))) {
+      await runReadyFirst(pending, concurrency, galleries, watched, async (l) => {
+        if (!(await analyzeOneLive(searchId, l, photosFor(l), imagesBudget, false))) {
           retry.push(l);
         }
       });
-      if (retry.length > 0) {
+      if (retry.length > 0 && watched()) {
         await sleep(RETRY_PAUSE_MS);
         await runPool(retry, concurrency, async (l) => {
-          if (!isSearchWatched(searchId)) return;
-          await analyzeOneLive(searchId, l, imagesBudget, true);
+          if (!watched()) return;
+          await analyzeOneLive(searchId, l, photosFor(l), imagesBudget, true);
         });
       }
     }

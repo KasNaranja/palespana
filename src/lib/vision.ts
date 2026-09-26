@@ -167,6 +167,7 @@ const stats = {
   r429min: 0, // 429 por minuto (transitorio)
   r429day: 0, // 429 por cuota diaria
   r503: 0, // modelo saturado
+  r429cap: 0, // 429 sin cuota: capacidad gratuita agotada (no nuestro cupo)
   totalCallMs: 0, // suma de duración de llamadas OK
   totalWaitMs: 0, // suma de espera por throttle
   // Último error NO-429/503 visto (para diagnosticar en /api/health sin logs).
@@ -202,8 +203,8 @@ const modelChain: string[] = Array.from(
   new Set([config.geminiModel, ...config.geminiFallbackModels])
 );
 const benchedUntil = new Map<string, number>();
-const modelStats: Record<string, { ok: number; r503: number }> = {};
-for (const m of modelChain) modelStats[m] = { ok: 0, r503: 0 };
+const modelStats: Record<string, { ok: number; r503: number; r429cap: number }> = {};
+for (const m of modelChain) modelStats[m] = { ok: 0, r503: 0, r429cap: 0 };
 
 /** Models to try now, in priority order: non-benched first; if every model is
  *  benched, the whole chain anyway (better a retry than an instant give-up). */
@@ -391,6 +392,17 @@ export async function analyzeImages(imageUrls: string[]): Promise<VisionResult> 
         stats.last429Metrics = quotaIds.length
           ? quotaIds.join(",")
           : `(sin cuota) ${message}`;
+        if (quotaIds.length === 0) {
+          // No quota named: not OUR per-minute or daily quota but free-tier
+          // capacity running out ("Resource has been exhausted", measured at
+          // ~23% of calls on a busy day). Rotating keys on the same model hits
+          // the same wall, so this request moves to the next model; the key
+          // only rests briefly on this model.
+          stats.r429cap++;
+          modelStats[model].r429cap++;
+          ks.parkedUntil[model] = Date.now() + 10 * 1000;
+          break;
+        }
         // Gemini responde RESOURCE_EXHAUSTED tanto para el límite POR MINUTO como
         // para el DIARIO, así que NO se puede usar ese código para decidir. Solo
         // la cuota DIARIA (métrica "...PerDay...") justifica aparcar la clave 30
