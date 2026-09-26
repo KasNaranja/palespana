@@ -246,6 +246,9 @@ export async function analyzeImages(imageUrls: string[]): Promise<VisionResult> 
       temperature: 0,
     },
   };
+  // Serialized once: with a whole gallery inline it's a few MB, and every
+  // retry / fallback model used to build its own copy.
+  const bodyJson = JSON.stringify(body);
 
   // In production the calls go through the pal-relay (US) because Google's
   // free tier geo-blocks Render Frankfurt; locally (no GEMINI_PROXY_URL) the
@@ -295,7 +298,7 @@ export async function analyzeImages(imageUrls: string[]): Promise<VisionResult> 
         r = await fetch(url, {
           method: "POST",
           headers,
-          body: JSON.stringify(body),
+          body: bodyJson,
           signal: AbortSignal.timeout(CALL_TIMEOUT_MS),
         });
       } catch {

@@ -302,9 +302,13 @@ export async function startAnalysis(searchId: string): Promise<void> {
       // ~1,2 análisis/s desaprovechando las claves. Duplicamos el paralelismo
       // (tope 16 para no arriesgar la memoria del plan free de Render); el
       // throttle por clave sigue limitando a ~13 req/min por clave.
+      // Cap lowered 16 → 10 once each analysis carried the whole gallery (up to
+      // 8 photos, several MB in flight): with 16 the free instance peaked at
+      // 432 of its 512MB. 10 keys × ~13 req/min ≈ 2 calls/s, and 10 calls of
+      // ~6 s in flight is about that same pace.
       const concurrency = Math.min(
         Math.max(COST_GUARD.ANALYSIS_CONCURRENCY, config.geminiKeys.length * 2),
-        16
+        10
       );
       // Gemini overloads come in bursts (503s): a listing that fails now very
       // often succeeds a few seconds later, typically on the fallback model.
