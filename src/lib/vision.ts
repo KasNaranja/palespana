@@ -173,7 +173,24 @@ const stats = {
   // El detalle nunca contiene la clave (viaja en cabecera, no en la URL/cuerpo).
   lastErrStatus: 0,
   lastErrDetail: "",
+  // Which Gemini quota a 429 hit (the metric name from the error, no key in
+  // it), and per-phase timings to see where an analysis spends its time.
+  last429Metrics: "",
+  phases: {
+    detail: { n: 0, ms: 0, fail: 0 }, // Vinted item page (gallery)
+    download: { n: 0, ms: 0, fail: 0 }, // photos for one listing
+    gemini: { n: 0, ms: 0, fail: 0 }, // model call(s) for one listing
+  },
 };
+
+type Phase = keyof typeof stats.phases;
+/** Record one phase run (ms elapsed since `startedAt`, and whether it failed). */
+export function notePhase(phase: Phase, startedAt: number, failed: boolean): void {
+  const p = stats.phases[phase];
+  p.n++;
+  p.ms += Date.now() - startedAt;
+  if (failed) p.fail++;
+}
 
 // ── Model chain ────────────────────────────────────────────────
 // A 503 means the MODEL is overloaded for everyone; every key hits the same
@@ -281,12 +298,14 @@ export async function analyzeImages(imageUrls: string[]): Promise<VisionResult> 
     throw new Error("Falta GEMINI_API_KEY para el análisis de visión.");
   }
 
+  const dlStart = Date.now();
   const parts = (
     await Promise.all(
       imageUrls.slice(0, COST_GUARD.MAX_IMAGES_PER_LISTING).map(downloadImage)
     )
   ).filter((p): p is ImagePart => p !== null);
 
+  notePhase("download", dlStart, parts.length === 0);
   if (parts.length === 0) {
     // Image download failed — transient. Throw so the caller degrades to a
     // NON-persisted inconclusive (retried next search) rather than caching it.
@@ -329,6 +348,7 @@ export async function analyzeImages(imageUrls: string[]): Promise<VisionResult> 
   // to the next key. A 503 benches the MODEL and jumps to the next one right
   // away — retrying other keys against an overloaded model only burns time.
   let res: Response | null = null;
+  const gemStart = Date.now();
   for (const model of modelsToTry()) {
     const url = urlFor(model);
     const tried = new Set<string>();
@@ -364,6 +384,12 @@ export async function analyzeImages(imageUrls: string[]): Promise<VisionResult> 
       }
       if (r.status === 429) {
         const detail = await r.text().catch(() => "");
+        const metrics = detail.match(/quotaMetric"?:s*"([^"]+)"/g);
+        if (metrics) {
+          stats.last429Metrics = Array.from(
+            new Set(metrics.map((m) => m.replace(/.*"([^"]+)"$/, "$1").split("/").pop() || ""))
+          ).join(",");
+        }
         // Gemini responde RESOURCE_EXHAUSTED tanto para el límite POR MINUTO como
         // para el DIARIO, así que NO se puede usar ese código para decidir. Solo
         // la cuota DIARIA (métrica "...PerDay...") justifica aparcar la clave 30
@@ -397,6 +423,7 @@ export async function analyzeImages(imageUrls: string[]): Promise<VisionResult> 
     // out of daily quota FOR THIS MODEL): the next model has its own quotas.
   }
 
+  notePhase("gemini", gemStart, !res || !res.ok);
   if (!res) {
     throw new Error("gemini_all_keys_exhausted");
   }

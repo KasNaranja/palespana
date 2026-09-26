@@ -18,7 +18,7 @@ import { getDemoVerdict } from "./demo";
 import { totalPrice } from "./types";
 import type { Listing, LanguageVerdict } from "./types";
 import { fetchListingPhotos } from "./vinted";
-import { analyzeImages } from "./vision";
+import { analyzeImages, notePhase } from "./vision";
 
 const active = new Set<string>();
 
@@ -76,7 +76,9 @@ async function analyzeOneLive(
   // failure we fall back to the front cover we already have.
   let photos = listing.photoUrls;
   if (listing.source === "vinted" && photos.length <= 1) {
+    const detailStart = Date.now();
     const gallery = await fetchListingPhotos(listing.vintedId);
+    notePhase("detail", detailStart, gallery.length === 0);
     if (gallery.length > photos.length) photos = gallery;
   }
 
