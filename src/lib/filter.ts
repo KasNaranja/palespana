@@ -86,6 +86,24 @@ const IRRELEVANT = [
   "solo caja",
   "solo manual",
   "sin juego",
+  // Non-games that eBay sellers list as "New" (seen in a real DS2 search:
+  // a metal lithograph, a trophy-boosting service, a cover-art insert).
+  "lithograph",
+  "litografia",
+  "trophy",
+  "trophies",
+  "trofeo",
+  "boosting",
+  "arte solo",
+  "art only",
+  "insert only",
+  "insertar",
+  "cover art",
+  "solo caratula",
+  "caratula solo",
+  "solo portada",
+  "replacement case",
+  "caja de repuesto",
 ];
 const irrelevantEntryRe = (w: string) => new RegExp(`\\b${w}(?:s|es)?\\b`);
 

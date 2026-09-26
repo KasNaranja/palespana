@@ -273,7 +273,10 @@ export function decide(obs: Observations): VisionResult {
   const evidence =
     `${langWhy[0].toUpperCase()}${langWhy.slice(1)}` +
     (sealWhy ? `; ${sealWhy}.` : ".");
-  return { verdict, evidence, platform, sealed, sealReason };
+  const sawCase = obs.photos.some((p) =>
+    ["front_cover", "back_cover", "spine_or_side"].includes(p.content)
+  );
+  return { verdict, evidence, platform, sealed, sealReason, sawCase };
 }
 
 /** Parse the model's JSON reply into observations (null if unusable). */

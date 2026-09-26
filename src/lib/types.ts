@@ -166,6 +166,9 @@ export interface VisionResult {
     | "wrap"
     | "strip"
     | "unknown";
+  // Some photo shows the game's case (front, back or spine). Marketplace
+  // "New" only stands in for a seal on something that IS a boxed game.
+  sawCase?: boolean;
 }
 
 export interface ApiError {

@@ -112,6 +112,7 @@ async function analyzeOneLive(
     if (
       listing.source === "ebay" &&
       listing.sellerCondition === "new" &&
+      result.sawCase === true &&
       result.sealed !== "yes" &&
       (result.sealReason === "no_wrap" || result.sealReason === "unknown")
     ) {
