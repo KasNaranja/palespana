@@ -9,9 +9,10 @@
 //
 //   1. bootstrapSession(): GET the homepage to obtain the anonymous session
 //      cookies (Vinted still mints them via set-cookie, datadome included).
-//   2. searchListings(): GET /catalog?search_text=... (HTML, ~95 cards/page)
-//      and parse the item cards. Each card's <a> carries a title attribute
-//      like "TÍTULO, Marca: X, Estado: Y, 12.00 €, 13.20 €" plus the thumb.
+//   2. searchListings(): GET /catalog?search_text=...&page=N (HTML, ~95
+//      cards/page) and parse the item cards. Each card's <a> carries a title
+//      attribute like "TÍTULO, Marca: X, Estado: Y, 12.00 €, 13.20 €" plus the
+//      thumb. searchListingsPlanned() runs one user search (several pages).
 //   3. fetchListingPhotos(): GET /items/{id} (HTML) and extract the full-size
 //      (f800) gallery — the back cover lives there. Called lazily by the
 //      analyzer only for listings actually being analyzed.
@@ -22,6 +23,7 @@
 // ─────────────────────────────────────────────────────────────
 
 import { config } from "./config";
+import { searchPlanned } from "./searchPlan";
 import { getDatadomeCookie, markDatadomeOk } from "./vintedCookie";
 import type { ConsoleKey, Listing } from "./types";
 
@@ -86,17 +88,30 @@ function mergeSetCookies(header: Headers) {
 // simultaneous homepage GETs with the same datadome (a burst pattern for
 // DataDome) whose set-cookie responses mergeSetCookies could interleave into a
 // jar mixing two different anonymous sessions. Concurrent callers join the
-// bootstrap already in flight instead; only a FORCE re-bootstrap (the 401/403
-// retry path, where the current session is known-bad) starts its own.
+// bootstrap already in flight instead. A FORCE re-bootstrap (the 401/403
+// retry path, where the session the request carried is known-bad) doesn't
+// join a normal one, but concurrent forced ones share a single homepage GET,
+// and none is needed when the session was already renewed after the failing
+// request went out (`failedSession`): two pages failing together used to
+// fetch the homepage twice.
 let bootstrapInFlight: Promise<void> | null = null;
+let forceInFlight: Promise<void> | null = null;
 
-async function bootstrapSession(force = false): Promise<void> {
+async function bootstrapSession(
+  force = false,
+  failedSession = cookieFetchedAt
+): Promise<void> {
   const datadome = getDatadomeCookie();
   const fresh = Date.now() - cookieFetchedAt < COOKIE_TTL_MS;
   // A "fresh" session is still stale if the stored datadome changed since the
   // last bootstrap (a new cookie just arrived): re-bootstrap with it right away.
   if (cookieJar && fresh && !force && datadome === bootstrapDatadome) return;
-  if (bootstrapInFlight && !force) return bootstrapInFlight;
+  if (force) {
+    if (forceInFlight) return forceInFlight;
+    if (cookieJar && cookieFetchedAt > failedSession) return; // already renewed
+  } else if (bootstrapInFlight) {
+    return bootstrapInFlight;
+  }
 
   const run = (async () => {
     // The stored datadome changed since the last bootstrap: purge the jar's old
@@ -122,6 +137,7 @@ async function bootstrapSession(force = false): Promise<void> {
 
     let res: Response;
     try {
+      notePageRequest(); // Vinted counts the homepage against the same limit
       res = await fetch(base() + "/", {
         headers,
         redirect: "follow",
@@ -150,17 +166,20 @@ async function bootstrapSession(force = false): Promise<void> {
     }
   })();
   bootstrapInFlight = run;
+  if (force) forceInFlight = run;
   try {
     await run;
   } finally {
     // Guard against a FORCE bootstrap having replaced the slot meanwhile.
     if (bootstrapInFlight === run) bootstrapInFlight = null;
+    if (forceInFlight === run) forceInFlight = null;
   }
 }
 
 /** GET an SSR page as text with the anonymous session (retries once on 401/403). */
 async function htmlGet(pathWithQuery: string, retryOnAuth = true): Promise<string> {
   await bootstrapSession();
+  const session = cookieFetchedAt; // which session this request carries
   // Vinted rotates datadome via set-cookie, which mergeSetCookies captures —
   // in that case the jar's copy is fresher and wins. Only when the jar has no
   // datadome at all do we append the stored one.
@@ -192,10 +211,13 @@ async function htmlGet(pathWithQuery: string, retryOnAuth = true): Promise<strin
 
   // 401 (sesión caducada) y 403 (anti-bot rechazando una cookie rancia) suelen
   // arreglarse renovando la sesión anónima. Reintentamos UNA vez, con una pausa
-  // breve para no parecer un bucle automático.
+  // breve para no parecer un bucle automático. El reintento (y la portada que
+  // pide bootstrapSession) son peticiones reales para Vinted: se anotan en la
+  // ventana del limitador para que las páginas siguientes las respeten.
   if ((res.status === 401 || res.status === 403) && retryOnAuth) {
     await new Promise((r) => setTimeout(r, 900));
-    await bootstrapSession(true);
+    await bootstrapSession(true, session);
+    notePageRequest();
     return htmlGet(pathWithQuery, false);
   }
   if (res.status === 429) {
@@ -324,11 +346,41 @@ function parseCatalogCards(html: string): Listing[] {
   return listings;
 }
 
-/** Search Vinted's catalog. Returns raw (un-deduped, un-filtered) listings. */
+/** A catalog page with at least this many cards is FULL: there is probably a
+ *  next page worth fetching. (Full pages carry ~95.) */
+export const FULL_CATALOG_PAGE = 90;
+
+/** Hard cap on catalog pages ONE search may request (see searchListingsPlanned). */
+export const MAX_CATALOG_PAGES_PER_SEARCH = 6;
+
+/** Catalog pages a search may still request. One per search, shared by all
+ *  its passes. */
+export interface CatalogBudget {
+  remaining: number;
+}
+
+export function catalogBudget(
+  max: number = MAX_CATALOG_PAGES_PER_SEARCH
+): CatalogBudget {
+  return { remaining: max };
+}
+
+export interface CatalogRequestOptions {
+  /** The search's page allowance; out of pages → [] without a request. */
+  budget?: CatalogBudget;
+  /** An EXTRA page (next page, short-name pass): if the rate limiter can't
+   *  serve it quickly it is skipped ([]) instead of making the user wait. */
+  optional?: boolean;
+}
+
+/** Search Vinted's catalog (one results page, 1-based). Returns raw
+ *  (un-deduped, un-filtered) listings. */
 export async function searchListings(
   query: string,
   consoleKey: ConsoleKey,
-  perPage: number
+  perPage: number,
+  page = 1,
+  opts: CatalogRequestOptions = {}
 ): Promise<Listing[]> {
   const params = new URLSearchParams();
   // Search by the game name only — the platform is applied afterwards by the
@@ -342,13 +394,44 @@ export async function searchListings(
   params.set("order", "relevance");
   const catalogIds = CONSOLE_CATALOG_IDS[consoleKey];
   if (catalogIds?.length) params.set("catalog_ids", catalogIds.join(","));
+  if (page > 1) params.set("page", String(page));
+
+  if (opts.budget) {
+    if (opts.budget.remaining <= 0) return [];
+    opts.budget.remaining--;
+  }
+  const granted = await acquirePageToken(
+    "catalog",
+    opts.optional ? OPTIONAL_CATALOG_MAX_WAIT_MS : CATALOG_MAX_WAIT_MS
+  );
+  if (!granted) {
+    if (opts.optional) {
+      console.warn(
+        `[vinted] página opcional omitida (cupo por minuto agotado): "${query}" p${page}`
+      );
+      return [];
+    }
+    // Blocked, or the minute's quota is spent by other searches: fail fast
+    // (the route says "inténtalo en un minuto") instead of hitting Vinted
+    // and extending the block for everyone.
+    throw new VintedError(
+      "rate_limited",
+      "Vinted está limitando peticiones (cupo por minuto agotado)."
+    );
+  }
 
   // The SSR catalog page carries ~95 cards (no per_page control). We return
   // ALL of them: parsing is cheap, and the route's relevance filter + per-source
   // cap decide what reaches analysis. (Trimming to 48 here threw away half the
   // page before the filter ever saw it — real copies ranked 49-96 by Vinted
   // were invisible.)
-  const html = await htmlGet(`/catalog?${params.toString()}`);
+  let html: string;
+  try {
+    html = await htmlGet(`/catalog?${params.toString()}`);
+  } catch (e) {
+    if (e instanceof VintedError && e.kind === "rate_limited") noteRateLimited();
+    throw e;
+  }
   const all = parseCatalogCards(html);
   if (all.length === 0 && !/\/items\/\d+-/.test(html)) {
     // Zero cards AND zero item links: either a real empty result or a layout
@@ -365,30 +448,152 @@ export async function searchListings(
   return all;
 }
 
-// ── Item pages (photo galleries), paced to Vinted's rate limit ──
+/**
+ * The route's Vinted search: searchPlanned (dual passes + next pages +
+ * short-name pass) with this search's catalog pages capped and paced by the
+ * shared limiter below. Catalog requests per search WITH a console chip:
+ *   · 2 always — focused + plain page 1 (they wait for the limiter);
+ *   · +1 per pass whose page 1 came back full (≥ FULL_CATALOG_PAGE cards) while
+ *     the first pages left fewer than `cap` candidates whose title names the
+ *     console (all candidates without a chip) → its page 2;
+ *   · +2 when the short-name pass applies ("dark souls 2 ps4", "… ii ps4");
+ *   never more than MAX_CATALOG_PAGES_PER_SEARCH (6). Without a chip: 1 + 1 + 2.
+ * Page 2 and short-name pages are optional: skipped when the limiter can't
+ * serve them within OPTIONAL_CATALOG_MAX_WAIT_MS. The short-name pages ask
+ * first, so when only CATALOG_RESERVE slots are free (a follow-up search while
+ * the previous one's galleries load) they are the ones served.
+ */
+export async function searchListingsPlanned(
+  query: string,
+  consoleKey: ConsoleKey,
+  cap: number
+): Promise<Listing[]> {
+  const budget = catalogBudget();
+  return searchPlanned(
+    (q, kind) =>
+      searchListings(q, consoleKey, cap, 1, {
+        budget,
+        optional: kind === "short",
+      }),
+    query,
+    consoleKey,
+    {
+      cap,
+      nextPage: (q, _kind, first) =>
+        first.length >= FULL_CATALOG_PAGE
+          ? searchListings(q, consoleKey, cap, 2, { budget, optional: true })
+          : Promise.resolve([]),
+    }
+  );
+}
+
+// ── Pacing: every page we request (catalog + item) shares one budget ──
 // Vinted answers 429 "You are rate limited" after ~15 page requests in a row
 // from one IP and then blocks for ~50s (measured: 15 OK then 429; 1 request
 // every 1.5s still gets blocked). Firing gallery fetches unpaced made ~45% of
 // them fail, so those listings were analyzed from the front cover alone.
 //
-// Vinted counts requests in any 60s window, so item pages go through a
-// SLIDING-window limiter kept below that (a token bucket let the initial
-// burst plus its refills exceed 15 within the first minute and got blocked).
-// The headroom is for catalog searches, which are not paced here: a block
-// would also make every new search fail on Vinted for ~50s. Small concurrency
-// cap too (pages are ~2MB each on a 512MB instance). On a 429 anyway, every
-// caller waits out the block and retries once.
+// Vinted counts requests in any 60s window, so pages go through a SLIDING-
+// window limiter kept below that (a token bucket let the initial burst plus
+// its refills exceed 15 within the first minute and got blocked). Catalog
+// pages count too: a search now asks for up to 6 of them, too many to fit in
+// unpaced headroom. The catalog has PRIORITY (the user is waiting): item pages
+// may only fill the window up to PAGES_PER_WINDOW - CATALOG_RESERVE, so a new
+// search always finds at least CATALOG_RESERVE slots free and takes every
+// slot that frees up after them (item pages can't until the count drops below
+// their share). The reserve covers a search's 2 essential pages + its 2
+// short-name pages (they ask before the page 2s): a follow-up search typed
+// while the previous one's galleries still fill the window used to get only
+// 3 slots and silently lose the short-name pass. It stays below the 6-page
+// maximum on purpose: item pages set how fast Vinted listings get analyzed
+// (their back cover), and each reserved slot costs them one page a minute.
+// Every real request to vinted.es counts, including the homepage bootstrap
+// and the 401/403 retry (notePageRequest). A 429 on either kind blocks both
+// for VINTED_BLOCK_MS. Item pages also have a small concurrency cap (~2MB each
+// on a 512MB instance) and wait out a block to retry once.
+const PAGES_WINDOW_MS = 60_000;
+const PAGES_PER_WINDOW = 14; // catalog + item pages in any 60 s (Vinted: ~15)
+const CATALOG_RESERVE = 4; // slots item pages leave to the catalog
+const DETAIL_PER_WINDOW = PAGES_PER_WINDOW - CATALOG_RESERVE; // 10
+// Measured ~50 s; with margin, so the first request after it doesn't meet a
+// block that lasted a little longer (it would burn the gallery's last try).
+const VINTED_BLOCK_MS = 65_000;
+// After a block the window restarts HALF full, so the requests that queued
+// during it don't leave together as a burst of a whole window.
+const PAGES_AFTER_BLOCK = Math.floor(PAGES_PER_WINDOW / 2);
+// How long a search's catalog page waits for a slot before giving up: the
+// essential ones (page 1) then fail as "rate_limited"; optional ones are skipped.
+const CATALOG_MAX_WAIT_MS = 20_000;
+const OPTIONAL_CATALOG_MAX_WAIT_MS = 10_000;
 const DETAIL_MAX_CONCURRENT = 2;
-const DETAIL_WINDOW_MS = 60_000;
-const DETAIL_PER_WINDOW = 11; // + a search's 2 catalog pages stays under 15
-const DETAIL_BLOCK_MS = 50_000;
 
 let detailInFlight = 0;
 const detailWaiters: Array<() => void> = [];
-const detailRecent: number[] = []; // start times of item-page requests
-let detailBlockedUntil = 0;
+const pageRecent: number[] = []; // start times of every paced page request
+let blockedUntil = 0;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** Record a request in the window (kept sorted: a note can arrive while the
+ *  post-block entries, stamped at the block's end, are still ahead). */
+function recordPage(at: number): void {
+  let i = pageRecent.length;
+  while (i > 0 && pageRecent[i - 1] > at) i--;
+  pageRecent.splice(i, 0, at);
+}
+
+/** A request to vinted.es that doesn't go through acquirePageToken (homepage
+ *  bootstrap, 401/403 retry): it counts against Vinted's limit all the same,
+ *  so the pages after it wait for it. */
+function notePageRequest(): void {
+  recordPage(Date.now());
+}
+
+/** Vinted just answered 429: stop every page request for the block. */
+function noteRateLimited(): void {
+  blockedUntil = Math.max(blockedUntil, Date.now() + VINTED_BLOCK_MS);
+  // The block resets Vinted's window too, but restart ours half full (see
+  // PAGES_AFTER_BLOCK); a second 429 from a request already in flight
+  // re-stamps them instead of adding more.
+  pageRecent.length = 0;
+  for (let i = 0; i < PAGES_AFTER_BLOCK; i++) pageRecent.push(blockedUntil);
+}
+
+/**
+ * Wait until Vinted isn't blocking us and the last-60s window has room for a
+ * page of this kind; true once the slot is taken. Gives up (false) when that
+ * would take longer than `maxWaitMs`, or as soon as `stillWanted` says the
+ * page isn't needed any more (a slot taken for nothing would sit in the
+ * window for a minute).
+ */
+async function acquirePageToken(
+  kind: "catalog" | "detail",
+  maxWaitMs = Infinity,
+  stillWanted: () => boolean = () => true
+): Promise<boolean> {
+  const limit = kind === "catalog" ? PAGES_PER_WINDOW : DETAIL_PER_WINDOW;
+  const deadline = Date.now() + maxWaitMs;
+  for (;;) {
+    if (!stillWanted()) return false;
+    const now = Date.now();
+    while (pageRecent.length && now - pageRecent[0] >= PAGES_WINDOW_MS) {
+      pageRecent.shift();
+    }
+    let wakeAt: number;
+    if (now < blockedUntil) {
+      wakeAt = blockedUntil;
+    } else if (pageRecent.length < limit) {
+      recordPage(now);
+      return true;
+    } else {
+      // The count drops below `limit` once the oldest (length - limit + 1)
+      // requests have left the window.
+      wakeAt = pageRecent[pageRecent.length - limit] + PAGES_WINDOW_MS + 50;
+    }
+    if (wakeAt > deadline) return false;
+    await sleep(wakeAt - now);
+  }
+}
 
 async function acquireDetailSlot(): Promise<void> {
   if (detailInFlight < DETAIL_MAX_CONCURRENT) {
@@ -405,43 +610,36 @@ function releaseDetailSlot(): void {
   if (next) next();
 }
 
-/** Wait until Vinted isn't blocking us and the last-60s window has room.
- *  Only called while holding a slot, so at most DETAIL_MAX_CONCURRENT
- *  callers wait here and they take turns. */
-async function acquireDetailToken(): Promise<void> {
-  for (;;) {
-    const now = Date.now();
-    if (now < detailBlockedUntil) {
-      await sleep(detailBlockedUntil - now);
-      continue;
-    }
-    while (detailRecent.length && now - detailRecent[0] >= DETAIL_WINDOW_MS) {
-      detailRecent.shift();
-    }
-    if (detailRecent.length < DETAIL_PER_WINDOW) {
-      detailRecent.push(now);
-      return;
-    }
-    await sleep(detailRecent[0] + DETAIL_WINDOW_MS - now + 50);
-  }
+/** The photo's own id (`/t/<id>/`), shared by every size and signature. */
+function photoId(url: string): string {
+  return url.match(/\/t\/([^/]+)\//)?.[1] ?? url;
 }
 
 function extractGallery(html: string): string[] {
-  // Gallery photos render as f800 (full-size) image URLs, in document order
-  // (front first). Thumbs/avatars use other size segments, so f800 alone
-  // selects exactly the gallery.
-  const urls: string[] = [];
-  const seen = new Set<string>();
+  // Each gallery photo is an <img> inside data-testid="item-photo-N" (N = its
+  // position). The page renders the gallery twice (desktop + mobile) and the
+  // seller's avatar also comes in the f800 size, so a bare f800 scan returned
+  // every photo twice — the second copy with a signature that 404s — plus the
+  // avatar. The analyzer sends the LAST photo too, so a listing could be
+  // judged on the seller's avatar instead of its disc photo.
+  const byPosition = new Map<number, string>();
   for (const m of html.matchAll(
-    /https:\/\/images1\.vinted\.net\/t[^"'\ )]+\/f800\/[^"'\ )]+/g
+    /data-testid="item-photo-(\d+)"[^>]*>\s*<img[^>]*?\ssrc="(https:\/\/images1\.vinted\.net\/[^"]+)"/g
   )) {
-    const u = decodeEntities(m[0]);
-    if (!seen.has(u)) {
-      seen.add(u);
-      urls.push(u);
-    }
+    const pos = Number(m[1]);
+    if (!byPosition.has(pos)) byPosition.set(pos, decodeEntities(m[2]));
   }
-  return urls;
+  const ordered = Array.from(byPosition.entries())
+    .sort((a, b) => a[0] - b[0])
+    .map(([, url]) => url);
+  // Same photo at two positions would be a markup quirk: keep it once.
+  const seen = new Set<string>();
+  return ordered.filter((u) => {
+    const id = photoId(u);
+    if (seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
 }
 
 /**
@@ -462,19 +660,17 @@ export async function fetchListingPhotos(
   await acquireDetailSlot();
   try {
     for (let attempt = 0; attempt < 2; attempt++) {
-      if (!stillWanted()) return [];
-      await acquireDetailToken();
-      if (!stillWanted()) return [];
+      // Only called while holding a slot, so at most DETAIL_MAX_CONCURRENT
+      // item pages wait for a token at once. The token is only taken while
+      // the search is still wanted (checked right before taking it), so an
+      // abandoned search doesn't leave a used-up slot behind.
+      if (!(await acquirePageToken("detail", Infinity, stillWanted))) return [];
       try {
         return extractGallery(await htmlGet(`/items/${vintedId}`));
       } catch (e) {
         if (e instanceof VintedError && e.kind === "rate_limited") {
-          detailBlockedUntil = Math.max(
-            detailBlockedUntil,
-            Date.now() + DETAIL_BLOCK_MS
-          );
-          detailRecent.length = 0; // the block resets Vinted's window too
-          continue; // wait out the block (acquireDetailToken) and retry once
+          noteRateLimited();
+          continue; // wait out the block (acquirePageToken) and retry once
         }
         return [];
       }

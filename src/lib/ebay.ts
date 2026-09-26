@@ -12,6 +12,8 @@
 // ─────────────────────────────────────────────────────────────
 
 import { config } from "./config";
+import { cleanListings } from "./filter";
+import { focusedQueryFor, interleave, shortNameQueries } from "./searchPlan";
 import type { ConsoleKey, Listing } from "./types";
 
 export type EbayErrorKind = "blocked" | "rate_limited" | "unavailable";
@@ -90,8 +92,18 @@ async function ebayGet(url: string, retry = true): Promise<Response> {
   return res;
 }
 
+// getItem results, cached per item: repeating a search (another chip, a typo
+// fixed) used to pay the same ≤50 getItem calls again out of the 5,000/day
+// quota. A listing's photos rarely change within hours. Map order = insertion
+// order, so the first key is the oldest (evicted when full).
+const PHOTO_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+const PHOTO_CACHE_MAX = 3000;
+const photoCache = new Map<string, { at: number; urls: string[] }>();
+
 /** getItem gives the full photo set (primary + additionalImages). */
 async function fetchItemPhotos(itemId: string): Promise<string[]> {
+  const hit = photoCache.get(itemId);
+  if (hit && Date.now() - hit.at < PHOTO_CACHE_TTL_MS) return hit.urls;
   try {
     const res = await ebayGet(ITEM_URL + encodeURIComponent(itemId));
     if (!res.ok) return [];
@@ -100,6 +112,13 @@ async function fetchItemPhotos(itemId: string): Promise<string[]> {
     if (item?.image?.imageUrl) urls.push(item.image.imageUrl);
     for (const a of item?.additionalImages ?? []) {
       if (a?.imageUrl) urls.push(a.imageUrl);
+    }
+    if (urls.length > 0) {
+      photoCache.delete(itemId); // re-insert as the newest
+      photoCache.set(itemId, { at: Date.now(), urls });
+      if (photoCache.size > PHOTO_CACHE_MAX) {
+        photoCache.delete(photoCache.keys().next().value as string);
+      }
     }
     return urls;
   } catch {
@@ -153,11 +172,17 @@ async function mapLimit<T, R>(
   return out;
 }
 
-/** ONE call to item_summary/search. Returns raw summaries, sliced to perPage. */
-async function fetchSummaries(query: string, perPage: number): Promise<any[]> {
+/** ONE call to item_summary/search. Returns raw summaries, sliced to perPage.
+ *  `spainOnly` keeps only items located in Spain. */
+async function fetchSummaries(
+  query: string,
+  perPage: number,
+  spainOnly = false
+): Promise<any[]> {
   const params = new URLSearchParams();
   params.set("q", query);
   params.set("limit", String(Math.min(perPage, 50)));
+  if (spainOnly) params.set("filter", "itemLocationCountry:ES");
 
   const res = await ebayGet(`${SEARCH_URL}?${params.toString()}`);
   if (res.status === 429) {
@@ -201,55 +226,119 @@ export async function searchListings(
   return enrichSummaries(await fetchSummaries(query, perPage));
 }
 
-/** Dual (console-focused + plain) search, resolved at the SUMMARY level.
+/** A raw summary plus its photo-less Listing (for titles/relevance). */
+interface Summary {
+  s: any;
+  light: Listing;
+}
+
+function toSummaries(raw: any[]): Summary[] {
+  const out: Summary[] = [];
+  for (const s of raw) {
+    const light = summaryToListing(s, []); // null = no id/price: unusable
+    if (light) out.push({ s, light });
+  }
+  return out;
+}
+
+const summaryKey = (x: Summary) => x.light.vintedId;
+
+/** The route's eBay search plan, resolved at the SUMMARY level (the same
+ *  passes as searchPlanned in searchPlan.ts, plus a Spain-located one).
  *
- *  Going through the API route's generic searchDual would enrich photos per
- *  pass: every listing found by BOTH queries (typically most of them — "mario
- *  ps4" vs "mario") would pay its getItem call twice only for the duplicate to
- *  be thrown away in the dedupe, doubling the daily-quota spend (~51 → ~102
- *  calls per search) and running two mapLimit(12) pools in parallel (24
- *  concurrent getItem). Instead: run the 2 cheap item_summary/search calls in
- *  parallel, merge the summaries deduped by itemId, and enrich the merged set
- *  ONCE (concurrency stays at 12, one getItem per unique listing).
+ *  Queries (item_summary/search, cheap), in two parallel rounds:
+ *    1. plain query restricted to items LOCATED IN SPAIN, console-focused
+ *       query, plain query;
+ *    2. the short-name pass ("dark souls 2 ps4"…) when it applies — each
+ *       short query both Spain-located and best match.
+ *  eBay's best-match top 50 for a popular game is full of US/Japan copies, so
+ *  Spanish sellers' copies (the ones this app is for) never made the list:
+ *  e.g. a new "…First Sin, juego para PS4" at 24,32 € from Spain. The
+ *  Spain-located results go FIRST in the merge, then the dual passes
+ *  interleaved 1:1, then the short-name ones; and they are guaranteed a slot
+ *  in the cap (see below).
  *
- *  The merge interleaves 1:1 (focused[0], plain[0], …) for the same reason
- *  searchDual does: downstream fetchSource caps at 25 cleaned listings, and a
- *  focused-first concat would push out exactly the plain-only items (copies
- *  whose title never names the console) this dual search exists to recover.
- *  Error semantics also match searchDual: if one pass fails we use the other;
- *  if both fail we rethrow the first error. `focusedQuery` null (no console
- *  chip, or the query already names it) collapses to the plain single search. */
-export async function searchListingsDual(
+ *  Photo enrichment (one getItem per listing, the costly part) runs ONCE, over
+ *  the merged set deduped by itemId and pre-filtered with the route's own
+ *  cleanListings + cap, so extra queries never mean extra getItem calls: at
+ *  most `perPage` per search (the old dual enriched up to ~100), fewer when
+ *  fetchItemPhotos' cache already holds them. Calls per search, worst case:
+ *  3 searches + 4 short-name searches + `perPage` getItem.
+ *
+ *  The result is FINAL — already cleaned, capped and in cleanListings' order
+ *  — so the route must not clean it again: re-running cleanListings over this
+ *  subset recomputes the learned sequel target on fewer strong matches, and a
+ *  different target could drop listings whose getItem was already paid.
+ *
+ *  Errors: if every round-1 query fails we rethrow the first error; otherwise
+ *  failed queries just add nothing. */
+export async function searchListingsPlanned(
   query: string,
-  focusedQuery: string | null,
+  consoleKey: ConsoleKey,
   perPage: number
 ): Promise<Listing[]> {
   if (!config.ebayClientId || !config.ebayClientSecret) return [];
-  if (!focusedQuery) return enrichSummaries(await fetchSummaries(query, perPage));
+  const focusedQuery = focusedQueryFor(query, consoleKey);
 
-  const [focusedRes, plainRes] = await Promise.allSettled([
-    fetchSummaries(focusedQuery, perPage),
+  const settled = await Promise.allSettled([
+    fetchSummaries(query, perPage, true),
+    ...(focusedQuery ? [fetchSummaries(focusedQuery, perPage)] : []),
     fetchSummaries(query, perPage),
   ]);
-  if (focusedRes.status === "rejected" && plainRes.status === "rejected") {
-    throw focusedRes.reason;
+  if (settled.every((r) => r.status === "rejected")) {
+    throw (settled[0] as PromiseRejectedResult).reason;
   }
-  const focused = focusedRes.status === "fulfilled" ? focusedRes.value : [];
-  const plain = plainRes.status === "fulfilled" ? plainRes.value : [];
+  const [spain, ...bestMatch] = settled.map((r) =>
+    toSummaries(r.status === "fulfilled" ? r.value : [])
+  );
 
-  const merged: any[] = [];
-  const seen = new Set<string>();
-  const push = (s: any) => {
-    if (!s || s.itemId == null) return; // summaryToListing would drop it anyway
-    const id = String(s.itemId);
-    if (seen.has(id)) return;
-    seen.add(id);
-    merged.push(s);
-  };
-  const longest = Math.max(focused.length, plain.length);
-  for (let i = 0; i < longest; i++) {
-    if (i < focused.length) push(focused[i]);
-    if (i < plain.length) push(plain[i]);
-  }
-  return enrichSummaries(merged);
+  const shorts = shortNameQueries(
+    query,
+    consoleKey,
+    [...spain, ...bestMatch.flat()].map((x) => x.light)
+  );
+  const shortRes = await Promise.all(
+    shorts.map(async (q) => {
+      const [inSpain, anywhere] = await Promise.all([
+        fetchSummaries(q, perPage, true).catch(() => []),
+        fetchSummaries(q, perPage).catch(() => []),
+      ]);
+      return { inSpain: toSummaries(inSpain), anywhere: toSummaries(anywhere) };
+    })
+  );
+
+  const locatedInSpain = interleave(
+    [spain, ...shortRes.map((r) => r.inSpain)],
+    summaryKey
+  );
+  const dual = interleave(bestMatch, summaryKey);
+  const shortAnywhere = interleave(
+    shortRes.map((r) => r.anywhere),
+    summaryKey
+  );
+  // Concatenated in that order; a one-list interleave = dedupe by itemId.
+  const merged = interleave(
+    [[...locatedInSpain, ...dual, ...shortAnywhere]],
+    summaryKey
+  );
+
+  // Which listings take the `perPage` slots is decided HERE: every relevant
+  // copy located in Spain first, so a pool of US/Japan best-match copies
+  // (NTSC, useless to this app's users) can't push them out. They come back
+  // in cleanListings' order (console in title first, …), like any source.
+  const ranked = cleanListings(
+    merged.map((x) => x.light),
+    query,
+    consoleKey
+  );
+  const inSpain = (l: Listing) => l.sellerCountry === "ES";
+  const keep = new Set(
+    [...ranked.filter(inSpain), ...ranked.filter((l) => !inSpain(l))]
+      .slice(0, perPage)
+      .map((l) => l.vintedId)
+  );
+  const byId = new Map(merged.map((x) => [x.light.vintedId, x.s]));
+  return enrichSummaries(
+    ranked.filter((l) => keep.has(l.vintedId)).map((l) => byId.get(l.vintedId))
+  );
 }

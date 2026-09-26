@@ -1,98 +1,23 @@
 // ─────────────────────────────────────────────────────────────
 // Vision analysis via Google Gemini (free tier, multimodal).
 //
-// Given up to 2 photos of a physical game copy, decide whether the copy is in
-// Spanish. Uses the Gemini REST endpoint (no SDK dependency, easier to package
-// inside Electron) and forces a STRICT JSON reply via responseSchema.
+// Given a listing's photos, the model reports what it SEES (see
+// visionPrompt.ts) and the rules there turn that into the language / platform
+// / seal verdict. Uses the Gemini REST endpoint (no SDK dependency) and forces
+// a STRICT JSON reply via responseSchema.
 //
 // The key stays server-side. Node runtime only.
 // ─────────────────────────────────────────────────────────────
 
 import { config, COST_GUARD } from "./config";
-import type { DetectedPlatform, SealedVerdict, VisionResult } from "./types";
-
-const SYSTEM_PROMPT = `Eres un experto en videojuegos físicos del mercado europeo (PAL) e identificas, a partir de las fotos de la carátula y la contraportada, si una copia está en español y de qué forma.
-
-Debes clasificar la copia en UNA de estas cuatro categorías:
-
-1) "es" = EDICIÓN ESPAÑOLA. La propia carátula/contraportada está en español: la descripción o sinopsis del reverso está redactada en castellano, o lleva sello "PAL España"/"PAL ESP"/"Totalmente en castellano", o distribuidora española (Sony España, Nintendo Ibérica, Proein, Erbe, FX Interactive). Es una copia pensada para el mercado español.
-
-2) "es_multi" = OTRO IDIOMA EN LA CAJA, PERO INCLUYE ESPAÑOL. El texto de marketing/sinopsis de la contraportada está en OTRO idioma (francés, italiano, alemán, inglés…), PERO en la lista técnica de idiomas del juego (secciones "VOIX"/"VOCI"/"LANGUAGES"/"IDIOMAS"/"VOZ"/"TEXTO"/"AUDIO"/"SUBTÍTULOS") aparece "ES" o "Español". Es un disco multi-idioma que SE PUEDE JUGAR en español aunque la caja no sea la edición española. Típico en juegos modernos de PS4/PS5/Switch/Xbox.
-
-3) "other" = SIN ESPAÑOL. La contraportada está en otro idioma y NO aparece "ES"/"Español" por ninguna parte (ni en el texto ni en la lista de idiomas).
-
-4) "inconclusive" = no se puede determinar: fotos borrosas/cortadas, o no hay NINGÚN texto legible que revele el idioma (ni en la portada ni en la contraportada).
-
-SEÑALES DE LA PORTADA (FRONTAL) — MUY IMPORTANTE, úsalas aunque no haya contraportada:
-La carátula frontal de los juegos modernos SÍ revela el idioma de la edición. Míralas siempre:
-- La FRANJA/BANDA AZUL de PlayStation (arriba a la izquierda, junto al PEGI) con el aviso de mejora a PS5: su idioma indica la edición.
-  · "Actualización disponible para PS5" / "Se requiere..." → ESPAÑOL (señal de "es").
-  · "Aggiornamento disponibile per PS5" → ITALIANO (→ "other", salvo que veas ES en la lista de idiomas del reverso).
-  · "Mise à niveau disponible sur PS5" → FRANCÉS (→ "other", salvo ES en la lista).
-  · "Upgrade available for PS5" / "Free upgrade" → INGLÉS.
-- El texto del PEGI y los descriptores ("Violencia"/"Violence"/"Violenza"; "Lenguaje soez"/"Bad Language"/"Linguaggio scurrile").
-- Pegatinas de tienda/precio: una etiqueta española (p. ej. "PVP", "€", tienda española) apoya "es"; "DEST. VENDITA" u otras en italiano apuntan a edición italiana.
-Si SOLO tienes la portada pero esa franja/PEGI/pegatina se lee claramente en un idioma, clasifícala por ese idioma (no la dejes en "inconclusive"). Solo usa "inconclusive" si de verdad no se lee nada.
-
-REGLAS CLAVE:
-- Distingue idiomas de verdad LEYENDO las palabras. El francés se parece al español pero NO es español: "JEU", "LANGUE", "Bienvenue", "monde", "vous", "avec", "ATTENTION", "disponible", "ans", acentos à/è/ç → francés. Italiano: "GIOCO", "lingua", "Benvenuto", "gli". Alemán: "SPIEL", "Sprache", "und", "für", "ß".
-- La diferencia entre "es" y "es_multi" es DÓNDE está el español: si el TEXTO de la contraportada está en castellano → "es". Si el texto está en otro idioma pero la LISTA de idiomas incluye ES → "es_multi".
-- Busca activamente la fila de idiomas: suele ser una línea tipo "EN / FR / IT / DE / ES / PT" cerca de los iconos de jugadores/tamaño. Si ves "ES" ahí y el resto de la caja es de otro idioma → "es_multi".
-- Ante duda entre "es" y "es_multi", elige "es_multi". Ante duda de si hay español o no, y no lo ves claro → "other" o "inconclusive"; no inventes.
-
-DETECCIÓN DE PLATAFORMA (campo "platform") — identifica la CONSOLA de la caja por su diseño/logos, con independencia del idioma:
-- "ps4" = funda AZUL de PlayStation 4 (banda superior azul con "PlayStation 4").
-- "ps5" = funda BLANCA de PlayStation 5 (banda superior blanca con "PlayStation 5").
-- "ps3" = PlayStation 3 (logo/banda "PlayStation 3", carátula negra clásica de PS3).
-- "ps2" = PlayStation 2 (caja negra clásica "PlayStation 2").
-- "ps1" = PlayStation original / PSone ("PlayStation", caja gris/negra).
-- "switch" = funda ROJA de Nintendo Switch (logo "Nintendo Switch").
-- "xbox" = Xbox (One / Series X|S / 360), banda verde o negra "XBOX".
-- "pc" = caja/funda de PC (PC DVD-ROM, Windows).
-- "other" = cualquier otra plataforma (PSP, PS Vita, Wii, Wii U, DS/3DS, Game Boy, Mega Drive, SNES, N64, Dreamcast…).
-- "unknown" = no se distingue la plataforma con seguridad.
-Usa "unknown" si dudas; NO adivines la plataforma. La plataforma es INDEPENDIENTE del idioma (un juego PS4 puede estar en cualquier idioma).
-
-DETECCIÓN DE PRECINTO (campo "sealed") — ¿la copia está NUEVA y precintada de fábrica?
-- "yes" = SOLO con evidencia visual clara del precinto de fábrica. La señal MÁS fiable en PS4/PS5 PAL: la TIRA de apertura del precinto — una tira ESTRECHA que NO está impresa en la carátula sino que forma parte del ENVOLTORIO de plástico transparente, situada en el borde INFERIOR de la portada, con la palabra "PlayStation" repetida muchas veces en letra pequeña a lo largo de toda la tira (o con "PS4"/"PS5" en esa tira). Si esa tira se ve presente e intacta, la copia está precintada.
-  OJO — NO CONFUNDIR: TODAS las carátulas de PS4/PS5 llevan IMPRESA de fábrica una banda con "PS4 / PlayStation 4" (o "PS5 / PlayStation 5") en el borde SUPERIOR; esa banda forma parte del diseño de la carátula, existe también en copias abiertas y NUNCA cuenta como precinto. La tira de precinto es algo DISTINTO y va siempre en el borde OPUESTO al de esa banda del logotipo (fíjate en el borde opuesto aunque la foto esté girada). Si la única banda con "PS4"/"PlayStation" que ves es la del logotipo de la consola, sealed = "unknown".
-  Otras señales válidas: plástico retráctil intacto envolviendo la caja — cuenta SOLO si ves PLIEGUES o ARRUGAS del plástico, solapas/bordes del celofán doblados en las esquinas o el lomo, o la costura/soldadura del envoltorio; el simple brillo o reflejo de la carátula NO cuenta jamás como celofán. En Nintendo Switch PAL, la tira de apertura ROJA con el texto "Nintendo Switch".
-- "no" = la copia se ve claramente ABIERTA: caja sin plástico, tira de apertura rota o ausente, fotos del disco/cartucho suelto, del interior de la caja o del manual.
-- "unknown" = el valor por defecto: las fotos no permiten juzgarlo con seguridad.
-MUY IMPORTANTE: NO adivines "yes" — los reflejos de una carátula brillante NO son celofán; ante cualquier duda, "unknown". Que el vendedor diga "nuevo" NO cuenta: solo lo que se VE en las fotos. El precinto es INDEPENDIENTE del idioma y de la plataforma (rellena SIEMPRE los tres campos).
-
-El campo "evidence" debe ser UNA sola frase en español citando la evidencia concreta vista (qué palabras, en qué idioma, y si viste "ES" en la lista de idiomas); si sealed es "yes" o "no", añade en esa misma frase la señal concreta del precinto que viste (p. ej. "tira inferior con 'PlayStation' repetido intacta", "pliegues del celofán en el lomo", o "foto del disco fuera de la caja").`;
-
-const USER_PROMPT = `Analiza estas fotos de una copia de un videojuego a la venta. ¿Está en español? ¿De qué consola/plataforma es la caja? ¿Está nueva y precintada de fábrica?`;
-
-const PLATFORMS = [
-  "ps1",
-  "ps2",
-  "ps3",
-  "ps4",
-  "ps5",
-  "switch",
-  "xbox",
-  "pc",
-  "other",
-  "unknown",
-] as const;
-
-const SEALED = ["yes", "no", "unknown"] as const;
-
-const RESPONSE_SCHEMA = {
-  type: "object",
-  properties: {
-    verdict: {
-      type: "string",
-      enum: ["es", "es_multi", "other", "inconclusive"],
-    },
-    evidence: { type: "string" },
-    platform: { type: "string", enum: [...PLATFORMS] },
-    sealed: { type: "string", enum: [...SEALED] },
-  },
-  required: ["verdict", "evidence", "platform", "sealed"],
-};
+import type { VisionResult } from "./types";
+import {
+  RESPONSE_SCHEMA,
+  SYSTEM_PROMPT,
+  USER_PROMPT,
+  decide,
+  parseObservations,
+} from "./visionPrompt";
 
 const MAX_BYTES = 5 * 1024 * 1024; // keep well under Gemini limits
 const ALLOWED = new Set(["image/jpeg", "image/png", "image/webp"]);
@@ -144,6 +69,20 @@ const keyStates: KeyState[] = config.geminiKeys.map((key) => ({
 }));
 let rrIndex = 0;
 
+// Per-key outcome tallies (by position in GEMINI_API_KEYS — never the key):
+// tells a key whose project is broken or throttled apart from a Google-wide
+// capacity problem, which hits every key alike.
+const keyCounters = keyStates.map(() => ({
+  ok: 0,
+  r429min: 0,
+  r429day: 0,
+  r429cap: 0,
+  r503: 0,
+  timeout: 0,
+}));
+
+const CALL_TIMEOUT_MS = 30_000;
+
 /** Space this key's calls by geminiMinIntervalMs (each key independently). */
 function throttleKey(ks: KeyState): Promise<void> {
   ks.chain = ks.chain.then(async () => {
@@ -168,6 +107,7 @@ const stats = {
   r429day: 0, // 429 por cuota diaria
   r503: 0, // modelo saturado
   r429cap: 0, // 429 sin cuota: capacidad gratuita agotada (no nuestro cupo)
+  timeouts: 0, // llamadas abortadas por CALL_TIMEOUT_MS
   totalCallMs: 0, // suma de duración de llamadas OK
   totalWaitMs: 0, // suma de espera por throttle
   // Último error NO-429/503 visto (para diagnosticar en /api/health sin logs).
@@ -235,12 +175,18 @@ export function getKeyStats(): {
   total: number;
   parked: number;
   active: number;
+  perKey: (typeof keyCounters)[number][];
 } {
   const now = Date.now();
   const parked = keyStates.filter(
     (k) => (k.parkedUntil[config.geminiModel] ?? 0) > now
   ).length;
-  return { total: keyStates.length, parked, active: keyStates.length - parked };
+  return {
+    total: keyStates.length,
+    parked,
+    active: keyStates.length - parked,
+    perKey: keyCounters,
+  };
 }
 
 /** Next non-parked, not-yet-tried key (round-robin). Null if none available. */
@@ -253,41 +199,6 @@ function pickKey(tried: Set<string>, model: string): KeyState | null {
     return ks;
   }
   return null;
-}
-
-function parseVerdict(text: string): VisionResult | null {
-  const match = text.match(/\{[\s\S]*\}/);
-  if (!match) return null;
-  let obj: any;
-  try {
-    obj = JSON.parse(match[0]);
-  } catch {
-    return null;
-  }
-  const v = obj?.verdict;
-  if (v !== "es" && v !== "es_multi" && v !== "other" && v !== "inconclusive")
-    return null;
-  const evidence =
-    typeof obj?.evidence === "string" && obj.evidence.trim()
-      ? obj.evidence.trim()
-      : v === "es"
-        ? "La contraportada muestra textos en español (edición española)."
-        : v === "es_multi"
-          ? "La caja es de otro idioma, pero la lista de idiomas incluye español (ES)."
-          : v === "other"
-            ? "La copia está en otro idioma según las fotos."
-            : "No hay evidencia suficiente para confirmar el idioma.";
-  const rawP = obj?.platform;
-  const platform: DetectedPlatform = (PLATFORMS as readonly string[]).includes(
-    rawP
-  )
-    ? rawP
-    : "unknown";
-  const rawS = obj?.sealed;
-  const sealed: SealedVerdict = (SEALED as readonly string[]).includes(rawS)
-    ? rawS
-    : "unknown";
-  return { verdict: v, evidence, platform, sealed };
 }
 
 /**
@@ -318,10 +229,12 @@ export async function analyzeImages(imageUrls: string[]): Promise<VisionResult> 
     contents: [
       {
         role: "user",
+        // Numbered so the model can say WHICH photo shows the disc, etc.
         parts: [
-          ...parts.map((p) => ({
-            inline_data: { mime_type: p.mimeType, data: p.data },
-          })),
+          ...parts.flatMap((p, i) => [
+            { text: `Foto ${i + 1}:` },
+            { inline_data: { mime_type: p.mimeType, data: p.data } },
+          ]),
           { text: USER_PROMPT },
         ],
       },
@@ -329,7 +242,7 @@ export async function analyzeImages(imageUrls: string[]): Promise<VisionResult> 
     generationConfig: {
       responseMimeType: "application/json",
       responseSchema: RESPONSE_SCHEMA,
-      maxOutputTokens: 300,
+      maxOutputTokens: 900,
       temperature: 0,
     },
   };
@@ -373,14 +286,27 @@ export async function analyzeImages(imageUrls: string[]): Promise<VisionResult> 
       };
       // When going through the relay, authenticate against it.
       if (config.geminiProxyUrl) headers["x-relay-token"] = config.relayToken;
-      const r = await fetch(url, {
-        method: "POST",
-        headers,
-        body: JSON.stringify(body),
-      });
+      const kc = keyCounters[keyStates.indexOf(ks)];
+      let r: Response;
+      try {
+        // Measured: a free-tier call hung for over 5 minutes (and 23-55 s
+        // stalls are common on a busy day). Past this, the next model in the
+        // chain is a better bet than waiting.
+        r = await fetch(url, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(body),
+          signal: AbortSignal.timeout(CALL_TIMEOUT_MS),
+        });
+      } catch {
+        stats.timeouts++;
+        kc.timeout++;
+        break; // → next model in the chain
+      }
       if (r.ok) {
         stats.ok++;
         modelStats[model].ok++;
+        kc.ok++;
         stats.totalCallMs += Date.now() - startedAt;
       }
       if (r.status === 429) {
@@ -399,6 +325,7 @@ export async function analyzeImages(imageUrls: string[]): Promise<VisionResult> 
           // the same wall, so this request moves to the next model; the key
           // only rests briefly on this model.
           stats.r429cap++;
+          kc.r429cap++;
           modelStats[model].r429cap++;
           ks.parkedUntil[model] = Date.now() + 10 * 1000;
           break;
@@ -411,9 +338,11 @@ export async function analyzeImages(imageUrls: string[]): Promise<VisionResult> 
         // y el rendimiento caía al de 1 sola clave).
         if (/per\s*day/i.test(detail)) {
           stats.r429day++;
+          kc.r429day++;
           ks.parkedUntil[model] = Date.now() + 30 * 60 * 1000; // cuota diaria agotada
         } else {
           stats.r429min++;
+          kc.r429min++;
           // Límite POR MINUTO (ojo: es por PROYECTO, así que varias claves del
           // mismo proyecto se pisan). Pausa corta para que la ventana se recupere:
           // sin ella el motor reintenta en bucle contra claves limitadas y el
@@ -424,6 +353,7 @@ export async function analyzeImages(imageUrls: string[]): Promise<VisionResult> 
       }
       if (r.status === 503) {
         stats.r503++;
+        kc.r503++;
         modelStats[model].r503++;
         benchedUntil.set(model, Date.now() + MODEL_BENCH_MS);
         break; // overloaded model → next model in the chain
@@ -453,8 +383,8 @@ export async function analyzeImages(imageUrls: string[]): Promise<VisionResult> 
       ?.map((p: any) => p?.text || "")
       .join("") || "";
 
-  const parsed = parseVerdict(text);
-  if (!parsed) {
+  const observations = parseObservations(text);
+  if (!observations) {
     return {
       verdict: "inconclusive",
       evidence: "El análisis no devolvió un resultado claro sobre el idioma.",
@@ -462,5 +392,5 @@ export async function analyzeImages(imageUrls: string[]): Promise<VisionResult> 
       sealed: "unknown",
     };
   }
-  return parsed;
+  return decide(observations);
 }

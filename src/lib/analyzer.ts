@@ -35,29 +35,15 @@ function nowIso() {
 }
 
 /**
- * Choose the photos most likely to reveal the copy's language. In Vinted game
- * listings the layout is almost always: photo 0 = front cover, photo 1 = BACK
- * cover (the decisive one — language list, PEGI, distributor), then detail /
- * receipt / spine shots. The old "last two photos" heuristic skipped the back
- * cover entirely on any listing with 4+ photos (it sent detail shots instead),
- * which made the model guess — the root cause of French copies slipping through
- * as "en español".
- *
- * We now send: front (0) for context, the second photo (1) which is the back
- * cover in the vast majority of listings, and the last photo as a fallback in
- * case the seller placed the back cover last. Deduped, capped at 3. On Gemini's
- * free tier extra images add no cost and no extra rate-limit hit (still one
- * request per listing), so 3 candidates is a strict accuracy win.
+ * Photos sent to the model: ALL of the listing's photos, in gallery order, up
+ * to MAX_IMAGES_PER_LISTING. The seal verdict depends on photos anywhere in
+ * the gallery — a single disc or open-case photo means the copy is not sealed
+ * — and sellers put the back cover in any position. The old pick (first,
+ * second and last photo) missed both: on a real listing it sent the front,
+ * the back and the seller's avatar, and skipped the two disc photos.
  */
 function selectPhotos(all: string[]): string[] {
-  if (all.length <= 1) return all.slice(0, 1);
-  // PROBADO Y REVERTIDO: enviar 2 fotos en vez de 3 solo bajó la latencia un 3%
-  // (11.857 → 11.515 ms), así que no compensaba perder el comodín de la última
-  // foto (los anuncios donde el vendedor pone la contraportada al final). El
-  // freno real no es el tamaño del envío, sino la capacidad de la instancia.
-  if (all.length === 2) return [all[0], all[1]];
-  const picks = [all[0], all[1], all[all.length - 1]];
-  return Array.from(new Set(picks));
+  return all.slice(0, COST_GUARD.MAX_IMAGES_PER_LISTING);
 }
 
 /** Returns false on a TRANSIENT failure (overload, rate limit, image

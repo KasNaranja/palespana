@@ -5,14 +5,17 @@ import { createSearch, supersedeSearch } from "@/lib/db";
 import { getDemoListings } from "@/lib/demo";
 import { cleanListings } from "@/lib/filter";
 import { startAnalysis } from "@/lib/analyzer";
-import { focusedQueryFor, searchDual } from "@/lib/searchPlan";
+import { searchPlanned } from "@/lib/searchPlan";
 import { ensureRuntimeSampler } from "@/lib/runtimeStats";
-import { searchListings as searchVinted, VintedError } from "@/lib/vinted";
+import {
+  searchListingsPlanned as searchVinted,
+  VintedError,
+} from "@/lib/vinted";
 import {
   searchListings as searchWallapop,
   WallapopError,
 } from "@/lib/wallapop";
-import { searchListingsDual as searchEbayDual, EbayError } from "@/lib/ebay";
+import { searchListingsPlanned as searchEbay, EbayError } from "@/lib/ebay";
 import type {
   ApiError,
   ConsoleKey,
@@ -47,16 +50,21 @@ interface SourceResult {
 }
 
 /** Fetch + clean one marketplace. Never throws: failures come back as `error`
- *  so one source going down doesn't take the other with it. */
+ *  so one source going down doesn't take the other with it. `preCleaned`:
+ *  the fetcher already returns the cleaned, ordered result (eBay, which must
+ *  choose before paying one getItem call per listing): only the cap applies. */
 async function fetchSource(
   label: string,
   fetcher: () => Promise<Listing[]>,
   query: string,
-  consoleKey: ConsoleKey
+  consoleKey: ConsoleKey,
+  preCleaned = false
 ): Promise<SourceResult> {
   try {
     const raw = await fetcher();
-    const listings = cleanListings(raw, query, consoleKey).slice(0, CAP);
+    const listings = (
+      preCleaned ? raw : cleanListings(raw, query, consoleKey)
+    ).slice(0, CAP);
     return { listings, error: null };
   } catch (e) {
     let kind: string | undefined;
@@ -121,18 +129,15 @@ export async function POST(req: Request) {
     const skip = Promise.resolve<SourceResult>({ listings: [], error: null });
     const ebayEnabled = !!(config.ebayClientId && config.ebayClientSecret);
     const [vintedRes, wallapopRes, ebayRes] = await Promise.all([
-      // Each source runs the DUAL search (focused + plain, merged/deduped);
-      // the merge happens BEFORE cleanListings, which already dedupes,
-      // filters and caps downstream.
+      // Each source runs the search PLAN (searchPlan.ts: focused + plain
+      // passes, next pages, short-name pass; merged/deduped); the merge
+      // happens BEFORE cleanListings, which dedupes, filters, orders and caps.
       config.vintedEnabled
         ? fetchSource(
             "Vinted",
-            () =>
-              searchDual(
-                (q) => searchVinted(q, consoleKey, CAP),
-                query,
-                consoleKey
-              ),
+            // Vinted's wrapper also caps and paces its catalog pages (≤6 per
+            // search, shared per-minute budget with the item pages).
+            () => searchVinted(query, consoleKey, CAP),
             query,
             consoleKey
           )
@@ -141,16 +146,18 @@ export async function POST(req: Request) {
         ? fetchSource(
             "Wallapop",
             () =>
-              searchDual(
+              searchPlanned(
                 // The PLAIN pass hands "todas" to wallapopKeywords so it falls
                 // back to the generic disambiguator ("mario videojuego")
                 // instead of re-appending the selected console — which would
                 // make the plain pass identical to the focused one and never
-                // recover copies whose title omits the console.
-                (q, focused) =>
-                  searchWallapop(q, focused ? consoleKey : "todas", CAP),
+                // recover copies whose title omits the console. (Short-name
+                // queries already carry the console term.)
+                (q, kind) =>
+                  searchWallapop(q, kind === "plain" ? "todas" : consoleKey, CAP),
                 query,
-                consoleKey
+                consoleKey,
+                { cap: CAP }
               ),
             query,
             consoleKey
@@ -159,14 +166,16 @@ export async function POST(req: Request) {
       ebayEnabled
         ? fetchSource(
             "eBay",
-            // eBay runs its dual at the SUMMARY level instead of through
-            // searchDual: the two item_summary/search results are merged and
-            // deduped BEFORE the per-item getItem photo enrichment, so
-            // overlapping results don't pay getItem twice (searchDual would
-            // enrich per pass and double eBay's daily-quota spend).
-            () => searchEbayDual(query, focusedQueryFor(query, consoleKey), CAP),
+            // eBay plans at the SUMMARY level instead of through searchPlanned:
+            // the item_summary/search results are merged, deduped and
+            // cleaned BEFORE the per-item getItem photo enrichment, so extra
+            // queries don't multiply eBay's daily-quota spend. Its result is
+            // final (preCleaned): cleaning that subset again could change the
+            // learned sequel target and drop listings already paid for.
+            () => searchEbay(query, consoleKey, CAP),
             query,
-            consoleKey
+            consoleKey,
+            true
           )
         : skip,
     ]);

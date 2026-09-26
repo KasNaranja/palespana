@@ -14,13 +14,15 @@ export const COST_GUARD = {
   MAX_LISTINGS_PER_SEARCH: 50,
   /** Hard cap on total images per search across all sources (a sanity bound;
    *  the daily quota counts REQUESTS, not images). MUST cover every listing's
-   *  full photo set: 3 sources × 50 × 3 = 450. When it was 150 (sized for 2
+   *  full photo set: 3 sources × 50 × 8 = 1200. When it was 150 (sized for 2
    *  sources × 25) the eBay era silently left the priciest ~25 listings of
    *  each search unanalyzed — "inconclusive", hence hidden by "Solo en
    *  español". */
-  MAX_IMAGES_PER_SEARCH: 450,
-  /** Max images sent per individual listing: front + back + a fallback back. */
-  MAX_IMAGES_PER_LISTING: 3,
+  MAX_IMAGES_PER_SEARCH: 1200,
+  /** Max images sent per listing: the whole gallery up to this many, because
+   *  the seal verdict hinges on ANY photo showing the disc or the open case
+   *  (sellers rarely post more than 8). Still one request per listing. */
+  MAX_IMAGES_PER_LISTING: 8,
   /** How many listings to analyze concurrently. Low, because the Gemini free
    *  tier is rate-limited and vision.ts already serializes calls. */
   ANALYSIS_CONCURRENCY: 2,
@@ -51,13 +53,16 @@ export const config = {
       const m = process.env.GEMINI_VISION_MODEL?.trim();
       return m && m !== "gemini-flash-lite-latest" ? m : "gemini-3.1-flash-lite";
     })(),
-  // Models tried, in order, when the main one answers 503 (overloaded). A 503
-  // is about the MODEL, not the key, so rotating keys against it is useless;
-  // switching model is what works. Each model also has its own free quota per
-  // project, so fallbacks add daily capacity too. Explicit ids only (aliases
-  // rotate silently). Validated with a real cover: both read platform + seal.
+  // Models tried, in order, when the main one is overloaded (503, quota-less
+  // 429) or too slow. Overload is about the MODEL, not the key, so switching
+  // model is what works; each model also has its own free quota per project.
+  // Explicit ids only (aliases rotate silently). Chosen on 47 labeled real
+  // listings: gemma-4-26b-a4b-it never over-claimed a seal or Spanish, answers
+  // in a steady ~3.5 s and took 25+ requests/min without a single 429/503;
+  // gemini-3.5-flash-lite is accurate but capped at 15/min per project.
   geminiFallbackModels: (
-    process.env.GEMINI_FALLBACK_MODELS || "gemini-3.5-flash-lite"
+    process.env.GEMINI_FALLBACK_MODELS ||
+    "gemma-4-26b-a4b-it,gemini-3.5-flash-lite"
   )
     .split(",")
     .map((m) => m.trim())
