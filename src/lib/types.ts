@@ -155,6 +155,17 @@ export interface VisionResult {
   evidence: string;
   platform: DetectedPlatform;
   sealed: SealedVerdict;
+  // WHY the seal verdict: hard evidence of an opened/used copy ("opened",
+  // "used_label", "loose_sleeve") vs merely not seeing a wrap ("no_wrap",
+  // "unknown"). Lets marketplace data (eBay "New") settle the soft cases only.
+  sealReason?:
+    | "opened"
+    | "used_label"
+    | "loose_sleeve"
+    | "no_wrap"
+    | "wrap"
+    | "strip"
+    | "unknown";
 }
 
 export interface ApiError {

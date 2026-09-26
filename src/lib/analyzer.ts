@@ -22,9 +22,10 @@ import { analyzeImages, notePhase } from "./vision";
 
 const active = new Set<string>();
 
-// Pause before the retry pass: long enough for a 503 burst to ease and for
-// per-minute 429 key parking (20s) to lapse.
-const RETRY_PAUSE_MS = 20_000;
+// Pauses before each retry round: the first is long enough for a 503 burst
+// to ease and for per-minute 429 key parking (20s) to lapse; later ones give
+// a saturated free tier time to recover.
+const RETRY_PAUSES_MS = [20_000, 45_000, 90_000];
 
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
@@ -102,6 +103,20 @@ async function analyzeOneLive(
     if (result.sealed === "yes" && listing.sellerCondition === "used") {
       result.sealed = "no";
       result.evidence = `${result.evidence.replace(/;[^;]*precintado[^;]*\.?$/, "")}; el vendedor lo declara usado, así que no puede estar precintado.`;
+    }
+    // eBay defines "New" for video games as unopened, in its original
+    // packaging. When the photos merely fail to show the wrap (stock images,
+    // distant shots) — but NOT when they show the copy opened, a shop sleeve
+    // or a used label — that declaration settles it. Measured: 4 eBay "New"
+    // copies lost their seal badge once the prompt got stricter.
+    if (
+      listing.source === "ebay" &&
+      listing.sellerCondition === "new" &&
+      result.sealed !== "yes" &&
+      (result.sealReason === "no_wrap" || result.sealReason === "unknown")
+    ) {
+      result.sealed = "yes";
+      result.evidence = `${result.evidence.replace(/;[^;]*plástico[^;]*\.?$/, "").replace(/\.$/, "")}; precintado: eBay lo declara "Nuevo" (sin abrir, en su embalaje original) y ninguna foto lo contradice.`;
     }
     updateListingVerdict(
       searchId,
@@ -362,12 +377,23 @@ export async function startAnalysis(searchId: string): Promise<void> {
           retry.push(l);
         }
       });
-      if (retry.length > 0 && watched()) {
-        await sleep(RETRY_PAUSE_MS);
-        await runPool(retry, concurrency, async (l) => {
+      // On a saturated day every model can refuse at once (measured: 22 of
+      // 150 listings still failing after a single 20 s retry). While someone
+      // is watching, keep trying with growing pauses; only the last round
+      // settles what's left as "inconclusive (retryable)".
+      let left = retry;
+      for (let round = 0; round < RETRY_PAUSES_MS.length && left.length > 0; round++) {
+        if (!watched()) break;
+        await sleep(RETRY_PAUSES_MS[round]);
+        const finalRound = round === RETRY_PAUSES_MS.length - 1;
+        const stillFailing: Listing[] = [];
+        await runPool(left, concurrency, async (l) => {
           if (!watched()) return;
-          await analyzeOneLive(searchId, l, photosFor(l), imagesBudget, true);
+          if (!(await analyzeOneLive(searchId, l, photosFor(l), imagesBudget, finalRound))) {
+            stillFailing.push(l);
+          }
         });
+        left = stillFailing;
       }
     }
   } finally {

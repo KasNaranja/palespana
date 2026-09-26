@@ -186,6 +186,7 @@ export function decide(obs: Observations): VisionResult {
     : "unknown";
   let sealed: SealedVerdict = "unknown";
   let sealWhy = "";
+  let sealReason: VisionResult["sealReason"] = "unknown";
   // Measured on 47 labeled real listings: the models rarely manage to see
   // the bottom tear strip even on sealed copies (reported on 3 of 18), but
   // they reliably see a factory shrink-wrap (18/18 on gemini-3.1-flash-lite).
@@ -195,18 +196,22 @@ export function decide(obs: Observations): VisionResult {
   // positive was a used copy in a loose sleeve tagged "Estado: Muy Bueno").
   if (opened.length > 0) {
     sealed = "no";
+    sealReason = "opened";
     sealWhy = `abierto (se ve el disco, el interior o el manual en la foto ${opened.join(", ")})`;
   } else if (obs.usedLabel) {
     sealed = "no";
+    sealReason = "used_label";
     sealWhy = "etiqueta de segunda mano o de estado de uso";
   } else if (obs.sealStrip === "visible" || obs.shrinkWrap === "factory") {
     sealed = "yes";
+    sealReason = obs.sealStrip === "visible" ? "strip" : "wrap";
     sealWhy =
       obs.sealStrip === "visible"
         ? "precintado (tira de apertura del plástico visible)"
         : "precintado (plástico de fábrica ajustado a la caja)";
   } else if (obs.shrinkWrap === "not_visible" || obs.shrinkWrap === "loose_sleeve") {
     sealed = "no";
+    sealReason = obs.shrinkWrap === "loose_sleeve" ? "loose_sleeve" : "no_wrap";
     sealWhy =
       obs.shrinkWrap === "loose_sleeve"
         ? "funda protectora suelta, no precinto de fábrica"
@@ -268,7 +273,7 @@ export function decide(obs: Observations): VisionResult {
   const evidence =
     `${langWhy[0].toUpperCase()}${langWhy.slice(1)}` +
     (sealWhy ? `; ${sealWhy}.` : ".");
-  return { verdict, evidence, platform, sealed };
+  return { verdict, evidence, platform, sealed, sealReason };
 }
 
 /** Parse the model's JSON reply into observations (null if unusable). */
