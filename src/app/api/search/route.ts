@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { randomUUID } from "node:crypto";
 import { config, COST_GUARD, demoReason, isDemoMode } from "@/lib/config";
-import { createSearch } from "@/lib/db";
+import { createSearch, supersedeSearch } from "@/lib/db";
 import { getDemoListings } from "@/lib/demo";
 import { cleanListings } from "@/lib/filter";
 import { startAnalysis } from "@/lib/analyzer";
@@ -78,7 +78,7 @@ async function fetchSource(
 
 export async function POST(req: Request) {
   ensureRuntimeSampler();
-  let body: { query?: string; console?: string };
+  let body: { query?: string; console?: string; supersedes?: string };
   try {
     body = await req.json();
   } catch {
@@ -87,6 +87,10 @@ export async function POST(req: Request) {
       { status: 400 }
     );
   }
+
+  // The client replaced its previous search: stop analyzing it (ids are
+  // unguessable UUIDs, so only the client that owns one can supersede it).
+  if (typeof body.supersedes === "string") supersedeSearch(body.supersedes);
 
   const query = (body.query || "").trim();
   const consoleKey = (

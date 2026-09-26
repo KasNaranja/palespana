@@ -195,7 +195,20 @@ export function setCachedVerdict(
 interface SearchRecord {
   meta: SearchMeta;
   listings: Listing[];
+  /** Last time a client polled this search (or created it). */
+  lastSeenAt: number;
+  /** The client that owned it started a new search: stop analyzing. */
+  superseded: boolean;
 }
+
+// A search nobody polls for this long is not being watched: its analysis is
+// paused so it stops competing for Gemini with the searches people are
+// looking at (a poll resumes it). Generous, because hidden tabs poll slowly
+// (browsers throttle background timers to about once a minute).
+const WATCH_IDLE_MS = 90_000;
+// Searches unseen for this long are dropped: before, every search stayed in
+// memory for the life of the process (the free instance has 512MB).
+const SEARCH_TTL_MS = 60 * 60_000;
 
 // Store the searches map on globalThis so it is shared across route module
 // instances. In `next dev`, route handlers can be compiled into separate module
@@ -210,11 +223,40 @@ const searches: Map<string, SearchRecord> =
 globalForDb.__cazapalSearches = searches;
 
 export function createSearch(meta: SearchMeta, listings: Listing[]): void {
+  const now = Date.now();
+  for (const [id, rec] of searches) {
+    if (now - rec.lastSeenAt > SEARCH_TTL_MS) searches.delete(id);
+  }
   // Deep-ish copy so later mutations don't leak references.
   searches.set(meta.id, {
     meta,
     listings: listings.map((l) => ({ ...l })),
+    lastSeenAt: now,
+    superseded: false,
   });
+}
+
+/** A client is looking at this search (status poll): keep it alive and, if it
+ *  had been superseded, un-supersede it (the user came back to it). */
+export function touchSearch(searchId: string): void {
+  const rec = searches.get(searchId);
+  if (!rec) return;
+  rec.lastSeenAt = Date.now();
+  rec.superseded = false;
+}
+
+/** The client replaced this search with a new one. */
+export function supersedeSearch(searchId: string): void {
+  const rec = searches.get(searchId);
+  if (rec) rec.superseded = true;
+}
+
+/** Whether anyone is still watching this search (see WATCH_IDLE_MS). */
+export function isSearchWatched(searchId: string): boolean {
+  const rec = searches.get(searchId);
+  return (
+    !!rec && !rec.superseded && Date.now() - rec.lastSeenAt < WATCH_IDLE_MS
+  );
 }
 
 export function getSearch(searchId: string): SearchMeta | null {

@@ -11,6 +11,7 @@ import { config, COST_GUARD, isDemoMode } from "./config";
 import {
   getCachedVerdicts,
   getListings,
+  isSearchWatched,
   updateListingVerdict,
 } from "./db";
 import { getDemoVerdict } from "./demo";
@@ -283,8 +284,15 @@ export async function startAnalysis(searchId: string): Promise<void> {
       // First pass leaves transient failures "pending" (the UI keeps polling);
       // after a short pause they get ONE final attempt. Before this, a burst
       // turned ~85 of 118 listings "inconclusive" in a single search.
+      //
+      // Every listing first checks that someone is still watching the search
+      // (see isSearchWatched): an abandoned or replaced search stops here,
+      // leaving the rest "pending", instead of eating Gemini throughput and
+      // quota from the searches people ARE looking at. A later status poll
+      // restarts analysis over whatever is still pending.
       const retry: Listing[] = [];
       await runPool(pending, concurrency, async (l) => {
+        if (!isSearchWatched(searchId)) return;
         if (!(await analyzeOneLive(searchId, l, imagesBudget, false))) {
           retry.push(l);
         }
@@ -292,6 +300,7 @@ export async function startAnalysis(searchId: string): Promise<void> {
       if (retry.length > 0) {
         await sleep(RETRY_PAUSE_MS);
         await runPool(retry, concurrency, async (l) => {
+          if (!isSearchWatched(searchId)) return;
           await analyzeOneLive(searchId, l, imagesBudget, true);
         });
       }

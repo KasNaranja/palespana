@@ -53,12 +53,15 @@ export default function Home() {
 
   const inputRef = useRef<HTMLInputElement>(null);
   const lastSubmit = useRef<{ q: string; c: ConsoleKey } | null>(null);
+  // Id of the search on screen, sent as `supersedes` with the next search.
+  const activeId = useRef<string | null>(null);
   const { recent, add, clear } = useRecentSearches();
 
   const search = useMutation<SearchResponse, CazaApiError, { q: string; c: ConsoleKey }>(
     {
-      mutationFn: ({ q, c }) => postSearch(q, c),
+      mutationFn: ({ q, c }) => postSearch(q, c, activeId.current ?? undefined),
       onSuccess: (data) => {
+        activeId.current = data.search.id;
         setActive({
           id: data.search.id,
           query: data.search.query,
@@ -79,6 +82,10 @@ export default function Home() {
     queryFn: () => getStatus(active!.id),
     enabled: !!active && active.total > 0,
     refetchInterval: (q) => (q.state.data?.done ? false : 1500),
+    // Keep polling in a background tab: the server pauses the analysis of
+    // searches nobody polls (see isSearchWatched), and switching tabs while
+    // waiting must not pause yours.
+    refetchIntervalInBackground: true,
     // A 404 means the server lost the search (see the effect below): retrying
     // the same id can never succeed, so surface it at once.
     retry: (count, err) =>

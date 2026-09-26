@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { countAnalyzed, getListings, getSearch } from "@/lib/db";
+import { countAnalyzed, getListings, getSearch, touchSearch } from "@/lib/db";
 import { startAnalysis } from "@/lib/analyzer";
 import { MARKET_SOURCES } from "@/lib/types";
 import type {
@@ -23,6 +23,10 @@ export async function GET(
       { status: 404 }
     );
   }
+
+  // Someone is watching this search: keeps its analysis running (and resumes
+  // it if it had been paused as abandoned — see the self-heal below).
+  touchSearch(params.id);
 
   const listings = getListings(params.id);
   const analyzed = countAnalyzed(params.id);

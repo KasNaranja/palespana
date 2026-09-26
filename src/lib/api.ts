@@ -31,14 +31,17 @@ async function asError(res: Response): Promise<CazaApiError> {
   );
 }
 
+/** `supersedes`: id of the search this one replaces on screen, so the server
+ *  stops spending analysis on it. */
 export async function postSearch(
   query: string,
-  consoleKey: ConsoleKey
+  consoleKey: ConsoleKey,
+  supersedes?: string
 ): Promise<SearchResponse> {
   const res = await fetch("/api/search", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ query, console: consoleKey }),
+    body: JSON.stringify({ query, console: consoleKey, supersedes }),
   });
   if (!res.ok) throw await asError(res);
   return res.json();
