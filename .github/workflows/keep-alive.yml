@@ -15,10 +15,10 @@ concurrency:
   group: keep-alive
   cancel-in-progress: true
 
-# actions:write para poder re-activar los workflows programados: GitHub los
+# actions:write para poder re-activar este workflow programado: GitHub los
 # desactiva tras 60 días sin commits en el repo (avisó por email). Llamar al
 # endpoint /enable en cada run es idempotente y resetea ese contador, así que
-# los robots nunca se apagan solos aunque no haya commits en meses.
+# el robot nunca se apaga solo aunque no haya commits en meses.
 permissions:
   actions: write
 
@@ -28,7 +28,7 @@ jobs:
     steps:
       - name: Evitar el auto-apagado por inactividad (re-enable de los crons)
         run: |
-          for wf in keep-alive.yml vinted-cookie.yml; do
+          for wf in keep-alive.yml; do
             curl -s -o /dev/null -w "enable $wf -> HTTP %{http_code}\n" \
               -X PUT \
               -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
