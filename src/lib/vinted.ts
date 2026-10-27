@@ -177,7 +177,85 @@ async function bootstrapSession(
 }
 
 /** GET an SSR page as text with the anonymous session (retries once on 401/403). */
+// ── Bright Data Web Unlocker (optional) ──
+// Vinted answers 403 to Render's datacenter IP. With BRIGHTDATA_API_TOKEN set,
+// every Vinted page is fetched through the unlocker instead (residential IPs,
+// raw HTML back), with no cookie jar or session bootstrap of our own. Billed
+// per successful request after a free monthly allowance, so a daily cap keeps
+// it inside the free tier; the count is in /api/health.
+const unlockerStats = { day: "", today: 0, ok: 0, fail: 0, lastStatus: 0 };
+
+export function getVintedUnlockerStats() {
+  const u = config.vintedUnlocker;
+  return {
+    enabled: !!u.token,
+    zone: u.token ? u.zone : null,
+    today: unlockerStats.day === new Date().toISOString().slice(0, 10) ? unlockerStats.today : 0,
+    dailyCap: u.dailyCap,
+    ok: unlockerStats.ok,
+    fail: unlockerStats.fail,
+    lastStatus: unlockerStats.lastStatus,
+  };
+}
+
+async function unlockerGet(pathWithQuery: string): Promise<string> {
+  const u = config.vintedUnlocker;
+  const day = new Date().toISOString().slice(0, 10);
+  if (unlockerStats.day !== day) {
+    unlockerStats.day = day;
+    unlockerStats.today = 0;
+  }
+  if (unlockerStats.today >= u.dailyCap) {
+    throw new VintedError(
+      "rate_limited",
+      "Se ha agotado el cupo diario de búsquedas en Vinted (vuelve mañana)."
+    );
+  }
+  unlockerStats.today++;
+  let res: Response;
+  try {
+    res = await fetch(u.endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${u.token}`,
+      },
+      body: JSON.stringify({ zone: u.zone, url: base() + pathWithQuery, format: "raw" }),
+      signal: AbortSignal.timeout(60_000),
+    });
+  } catch (e) {
+    unlockerStats.fail++;
+    throw new VintedError(
+      "unavailable",
+      `No se pudo contactar con el desbloqueador de Vinted: ${(e as Error).message}`
+    );
+  }
+  unlockerStats.lastStatus = res.status;
+  if (!res.ok) {
+    unlockerStats.fail++;
+    if (res.status === 429) {
+      throw new VintedError("rate_limited", "Vinted está limitando peticiones.", 429);
+    }
+    if (res.status === 401 || res.status === 407) {
+      // Bad/expired token or wrong zone: a configuration problem, not Vinted.
+      throw new VintedError(
+        "unavailable",
+        `El desbloqueador de Vinted rechazó la clave (HTTP ${res.status}).`,
+        res.status
+      );
+    }
+    throw new VintedError(
+      res.status === 403 ? "blocked" : "unavailable",
+      `Vinted respondió ${res.status} a través del desbloqueador.`,
+      res.status
+    );
+  }
+  unlockerStats.ok++;
+  return res.text();
+}
+
 async function htmlGet(pathWithQuery: string, retryOnAuth = true): Promise<string> {
+  if (config.vintedUnlocker.token) return unlockerGet(pathWithQuery);
   await bootstrapSession();
   const session = cookieFetchedAt; // which session this request carries
   // Vinted rotates datadome via set-cookie, which mergeSetCookies captures —
@@ -373,7 +451,11 @@ export interface CatalogBudget {
 export function catalogBudget(
   max: number = MAX_CATALOG_PAGES_PER_SEARCH
 ): CatalogBudget {
-  return { remaining: max };
+  // Through the metered unlocker every page counts against the free tier.
+  const unlocker = config.vintedUnlocker;
+  return {
+    remaining: unlocker.token ? Math.min(max, unlocker.catalogPagesPerSearch) : max,
+  };
 }
 
 export interface CatalogRequestOptions {

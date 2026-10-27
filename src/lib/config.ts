@@ -69,6 +69,23 @@ export const config = {
     .filter(Boolean),
   // Minimum ms between Gemini requests (free tier ~ a handful per minute).
   geminiMinIntervalMs: Number(process.env.GEMINI_MIN_INTERVAL_MS || "4500"),
+  // Vinted through Bright Data's Web Unlocker: Vinted blocks Render's
+  // datacenter IP (403), the unlocker fetches the same page through
+  // residential IPs and returns its raw HTML. Billed per successful request
+  // after a free monthly allowance, so it's OFF unless the token is set, and
+  // capped per search and per day to stay inside the free tier.
+  vintedUnlocker: {
+    token: process.env.BRIGHTDATA_API_TOKEN?.trim() || "",
+    zone: process.env.BRIGHTDATA_ZONE?.trim() || "web_unlocker1",
+    endpoint:
+      process.env.BRIGHTDATA_API_URL?.trim() || "https://api.brightdata.com/request",
+    // ~160/day ≈ 5,000/month, the free allowance.
+    dailyCap: Number(process.env.VINTED_UNLOCKER_DAILY_CAP || "160"),
+    // Per search: result pages, and item pages (full gallery + description,
+    // the evidence for language and seal) for the cheapest listings only.
+    catalogPagesPerSearch: Number(process.env.VINTED_UNLOCKER_CATALOG_PAGES || "3"),
+    detailPagesPerSearch: Number(process.env.VINTED_UNLOCKER_DETAIL_PAGES || "10"),
+  },
   // Gemini relay (pal-relay, Render Oregon): Google geo-blocks the free tier
   // from Render Frankfurt, so in production the calls go through a US relay.
   // Empty (e.g. local dev from Spain) → direct Google endpoint.

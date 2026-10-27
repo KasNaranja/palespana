@@ -94,6 +94,13 @@ services:
         sync: false
       - key: EBAY_CLIENT_SECRET
         sync: false
+      # Vinted through Bright Data's Web Unlocker (Vinted blocks Render's IP).
+      # Optional: without the token Vinted is fetched directly (blocked here).
+      # BRIGHTDATA_ZONE only if the zone isn't named "web_unlocker1".
+      - key: BRIGHTDATA_API_TOKEN
+        sync: false
+      - key: BRIGHTDATA_ZONE
+        sync: false
 
   # Gemini relay: US region so Google's free tier accepts the calls. It only
   # forwards :generateContent requests to generativelanguage.googleapis.com and

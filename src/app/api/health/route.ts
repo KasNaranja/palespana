@@ -4,6 +4,7 @@ import { getKeyStats, getVisionStats } from "@/lib/vision";
 import { getDatadomeStatus } from "@/lib/vintedCookie";
 import { getRuntimeStats } from "@/lib/runtimeStats";
 import { getEbayItemStats } from "@/lib/ebay";
+import { getVintedUnlockerStats } from "@/lib/vinted";
 
 export const dynamic = "force-dynamic";
 
@@ -34,6 +35,8 @@ export async function GET() {
     runtime: getRuntimeStats(),
     // eBay per-listing photo calls (getItem): failures leave a single photo.
     ebayItems: getEbayItemStats(),
+    // Vinted through Bright Data: on/off and how many requests today vs the cap.
+    vintedUnlocker: getVintedUnlockerStats(),
     cacheEnabled: config.cacheEnabled,
     maxListingsPerSource: COST_GUARD.MAX_LISTINGS_PER_SEARCH,
     sources: {

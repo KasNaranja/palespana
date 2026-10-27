@@ -356,8 +356,16 @@ export async function startAnalysis(searchId: string): Promise<void> {
       // fetched when a worker reached it, and the unpaced burst got ~45% of
       // pages rejected — those listings were judged on the front cover alone.
       const galleries = new Map<string, Gallery>();
+      // Through the metered Bright Data unlocker every item page counts
+      // against the free tier: only the cheapest listings (pending is sorted
+      // by price) get their full gallery; the rest are judged on the cover.
+      let detailBudget = config.vintedUnlocker.token
+        ? config.vintedUnlocker.detailPagesPerSearch
+        : Infinity;
       for (const l of pending) {
         if (l.source !== "vinted" || l.photoUrls.length > 1) continue;
+        if (detailBudget <= 0) continue;
+        detailBudget--;
         const startedAt = Date.now();
         const g: Gallery = { done: false, photos: [], description: "", promise: Promise.resolve() };
         g.promise = fetchListingDetail(l.vintedId, watched).then(({ photos, description }) => {
