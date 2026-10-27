@@ -162,6 +162,8 @@ function summaryToListing(s: any, photos: string[]): Listing | null {
     source: "ebay",
     vintedId: String(s.itemId),
     title: String(s.title ?? "").trim() || `Anuncio eBay`,
+    sellerText: `${String(s.title ?? "")}\n${String(s.shortDescription ?? "")}`.trim(),
+    sellerConditionRaw: typeof s.condition === "string" ? s.condition : null,
     price: amount,
     shippingPrice: null, // could be parsed from shippingOptions; unknown up front
     currency: s.price?.currency || "EUR",
@@ -171,10 +173,15 @@ function summaryToListing(s: any, photos: string[]): Listing | null {
     sellerCountry: s.itemLocation?.country || null,
     // eBay conditionId: 1000 new, 1500/1750 new other / with defects,
     // 2000-2500 refurbished, 2750+ used (like new, very good, good…).
+    // 1500 ("Open box" / "Nuevo: otro") is by eBay's definition possibly
+    // "in the original packaging but not sealed": never a factory seal. 1750
+    // (new with defects) stays unknown: a sealed copy with a dented case.
     sellerCondition: (() => {
       const id = Number(s.conditionId);
       if (!Number.isFinite(id) || id <= 0) return null;
-      return id === 1000 ? "new" : id >= 2000 ? "used" : null;
+      if (id === 1000) return "new";
+      if (id === 1500) return "open_box";
+      return id >= 2000 ? "used" : null;
     })(),
     languageVerdict: "pending",
     verdictEvidence: null,

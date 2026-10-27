@@ -347,6 +347,8 @@ function parseCatalogCards(html: string): Listing[] {
       listingUrl: base() + c.path,
       sellerCountry: null, // not present in the card markup
       sellerCondition,
+      sellerConditionRaw: m[2].trim() || null,
+      sellerText: title,
       languageVerdict: "pending",
       verdictEvidence: null,
       analyzedAt: null,
@@ -662,10 +664,33 @@ function extractGallery(html: string): string[] {
  * longer watched, a queued fetch gives up instead of spending Vinted's rate
  * budget on it.
  */
+/** The item page's seller description (from its meta description). */
+function extractDescription(html: string): string {
+  const m = html.match(/<meta name="description" content="([^"]*)"/);
+  return m ? decodeEntities(m[1]).trim() : "";
+}
+
+export interface ListingDetail {
+  photos: string[];
+  description: string;
+}
+
+/** Photos for one listing (see fetchListingDetail). */
 export async function fetchListingPhotos(
   vintedId: string,
   stillWanted: () => boolean = () => true
 ): Promise<string[]> {
+  return (await fetchListingDetail(vintedId, stillWanted)).photos;
+}
+
+/** The item page's full photo gallery plus the seller's description (seal
+ *  claims like "precintado" / "desprecintado pero sin usar" live there). One
+ *  request: the same page the gallery already needed. */
+export async function fetchListingDetail(
+  vintedId: string,
+  stillWanted: () => boolean = () => true
+): Promise<ListingDetail> {
+  const none: ListingDetail = { photos: [], description: "" };
   await acquireDetailSlot();
   try {
     for (let attempt = 0; attempt < 2; attempt++) {
@@ -673,18 +698,19 @@ export async function fetchListingPhotos(
       // item pages wait for a token at once. The token is only taken while
       // the search is still wanted (checked right before taking it), so an
       // abandoned search doesn't leave a used-up slot behind.
-      if (!(await acquirePageToken("detail", Infinity, stillWanted))) return [];
+      if (!(await acquirePageToken("detail", Infinity, stillWanted))) return none;
       try {
-        return extractGallery(await htmlGet(`/items/${vintedId}`));
+        const html = await htmlGet(`/items/${vintedId}`);
+        return { photos: extractGallery(html), description: extractDescription(html) };
       } catch (e) {
         if (e instanceof VintedError && e.kind === "rate_limited") {
           noteRateLimited();
           continue; // wait out the block (acquirePageToken) and retry once
         }
-        return [];
+        return none;
       }
     }
-    return [];
+    return none;
   } finally {
     releaseDetailSlot();
   }

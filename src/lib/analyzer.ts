@@ -17,7 +17,9 @@ import {
 import { getDemoVerdict } from "./demo";
 import { totalPrice } from "./types";
 import type { Listing, LanguageVerdict } from "./types";
-import { fetchListingPhotos } from "./vinted";
+import { fetchListingDetail } from "./vinted";
+import { fetchItemCondition } from "./wallapop";
+import { combineSeal } from "./sealSignals";
 import { analyzeImages, notePhase } from "./vision";
 
 const active = new Set<string>();
@@ -54,6 +56,7 @@ async function analyzeOneLive(
   searchId: string,
   listing: Listing,
   photos: string[],
+  sellerDescription: string,
   imagesBudget: { remaining: number },
   finalAttempt: boolean
 ): Promise<boolean> {
@@ -95,30 +98,26 @@ async function analyzeOneLive(
   imagesBudget.remaining -= willSend;
 
   try {
-    const result = await analyzeImages(chosen.slice(0, willSend));
-    // The seller's own declared condition overrules a "sealed" read from the
-    // photos: a real listing marked "Muy bueno" (used) came out sealed because
-    // the model took the clear sleeve every PS4 case has over its cover art
-    // for factory shrink-wrap.
-    if (result.sealed === "yes" && listing.sellerCondition === "used") {
-      result.sealed = "no";
-      result.evidence = `${result.evidence.replace(/;[^;]*precintado[^;]*\.?$/, "")}; el vendedor lo declara usado, así que no puede estar precintado.`;
-    }
-    // eBay defines "New" for video games as unopened, in its original
-    // packaging. When the photos merely fail to show the wrap (stock images,
-    // distant shots) — but NOT when they show the copy opened, a shop sleeve
-    // or a used label — that declaration settles it. Measured: 4 eBay "New"
-    // copies lost their seal badge once the prompt got stricter.
-    if (
-      listing.source === "ebay" &&
-      listing.sellerCondition === "new" &&
-      result.sawCase === true &&
-      result.sealed !== "yes" &&
-      (result.sealReason === "no_wrap" || result.sealReason === "unknown")
-    ) {
-      result.sealed = "yes";
-      result.evidence = `${result.evidence.replace(/;[^;]*plástico[^;]*\.?$/, "").replace(/\.$/, "")}; precintado: eBay lo declara "Nuevo" (sin abrir, en su embalaje original) y ninguna foto lo contradice.`;
-    }
+    // Wallapop's declared condition needs one small extra request: run it
+    // alongside the (much slower) vision call.
+    const conditionP: Promise<string | null | undefined> =
+      listing.source === "wallapop"
+        ? fetchItemCondition(listing.vintedId)
+        : Promise.resolve(null);
+    const vision = await analyzeImages(chosen.slice(0, willSend));
+    // Seal: the photos alone missed sealed copies the seller plainly declared
+    // (stock photos, distant shots) and once took a used case's clear cover
+    // sleeve for shrink-wrap. combineSeal adds what the seller wrote and the
+    // condition they picked; any opened/used evidence still wins.
+    const condition = await conditionP;
+    // Wallapop's condition request failed (not "no condition"): it might have
+    // said "used", so no seller upgrade, and a "yes" isn't cached for good.
+    const conditionUnavailable = condition === undefined;
+    const result = combineSeal(vision, listing, {
+      description: sellerDescription,
+      condition: condition ?? null,
+      conditionUnavailable,
+    });
     updateListingVerdict(
       searchId,
       listing.source,
@@ -126,7 +125,7 @@ async function analyzeOneLive(
       result.verdict,
       result.evidence,
       nowIso(),
-      true,
+      !(conditionUnavailable && result.sealed === "yes"),
       result.platform,
       result.sealed
     );
@@ -185,6 +184,7 @@ async function analyzeOneDemo(
 interface Gallery {
   done: boolean;
   photos: string[];
+  description: string;
   promise: Promise<void>;
 }
 
@@ -349,7 +349,7 @@ export async function startAnalysis(searchId: string): Promise<void> {
 
       // Vinted cards only carry the front cover; the decisive BACK cover is in
       // the item page, which Vinted rate-limits (~15 pages/min per IP). All
-      // galleries are requested up front, in price order, and fetchListingPhotos
+      // galleries are requested up front, in price order, and fetchListingDetail
       // paces them. Meanwhile the pool below analyzes whatever is READY:
       // Wallapop/eBay listings (full photo sets from their APIs) and Vinted
       // listings whose gallery arrived. Before, a Vinted listing was only
@@ -359,14 +359,17 @@ export async function startAnalysis(searchId: string): Promise<void> {
       for (const l of pending) {
         if (l.source !== "vinted" || l.photoUrls.length > 1) continue;
         const startedAt = Date.now();
-        const g: Gallery = { done: false, photos: [], promise: Promise.resolve() };
-        g.promise = fetchListingPhotos(l.vintedId, watched).then((photos) => {
+        const g: Gallery = { done: false, photos: [], description: "", promise: Promise.resolve() };
+        g.promise = fetchListingDetail(l.vintedId, watched).then(({ photos, description }) => {
+          g.description = description;
           notePhase("detail", startedAt, photos.length === 0);
           g.photos = photos;
           g.done = true;
         });
         galleries.set(listingKey(l), g);
       }
+      const descriptionFor = (l: Listing): string =>
+        galleries.get(listingKey(l))?.description ?? "";
       const photosFor = (l: Listing): string[] => {
         const g = galleries.get(listingKey(l));
         return g && g.photos.length > l.photoUrls.length ? g.photos : l.photoUrls;
@@ -374,7 +377,7 @@ export async function startAnalysis(searchId: string): Promise<void> {
 
       const retry: Listing[] = [];
       await runReadyFirst(pending, concurrency, galleries, watched, async (l) => {
-        if (!(await analyzeOneLive(searchId, l, photosFor(l), imagesBudget, false))) {
+        if (!(await analyzeOneLive(searchId, l, photosFor(l), descriptionFor(l), imagesBudget, false))) {
           retry.push(l);
         }
       });
@@ -390,7 +393,7 @@ export async function startAnalysis(searchId: string): Promise<void> {
         const stillFailing: Listing[] = [];
         await runPool(left, concurrency, async (l) => {
           if (!watched()) return;
-          if (!(await analyzeOneLive(searchId, l, photosFor(l), imagesBudget, finalRound))) {
+          if (!(await analyzeOneLive(searchId, l, photosFor(l), descriptionFor(l), imagesBudget, finalRound))) {
             stillFailing.push(l);
           }
         });

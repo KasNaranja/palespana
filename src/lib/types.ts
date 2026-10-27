@@ -96,9 +96,19 @@ export interface Listing {
   sellerCountry: string | null; // ISO-2 code, e.g. "ES", "FR"
   // Condition the SELLER declared on the marketplace ("used" = Vinted "Muy
   // bueno/Bueno/Satisfactorio", eBay used/refurbished). A copy declared used
-  // can't be factory-sealed, whatever the photos seem to show. null = unknown
-  // (Wallapop search results don't carry it).
-  sellerCondition?: "new" | "used" | null;
+  // can't be factory-sealed, whatever the photos seem to show. "open_box" =
+  // eBay "New other / Open box" (1500): new, but by eBay's own definition
+  // possibly in its packaging and NOT sealed. null = unknown (Wallapop search
+  // results don't carry it).
+  sellerCondition?: "new" | "used" | "open_box" | null;
+  // The marketplace's own condition label, verbatim ("Nuevo con etiquetas",
+  // "un_opened", "Nuevo"…): finer than sellerCondition, used as seal evidence.
+  // Server-side only (see publicListing).
+  sellerConditionRaw?: string | null;
+  // What the seller wrote (title + description when the source gives it), for
+  // the seal claims in sealSignals.ts ("precintado", "desprecintado"…).
+  // Server-side only (see publicListing).
+  sellerText?: string;
   languageVerdict: LanguageVerdict;
   verdictEvidence: string | null; // one sentence in Spanish
   detectedPlatform?: DetectedPlatform; // console read from the box art by the AI
@@ -109,6 +119,16 @@ export interface Listing {
 /** Total price used for sorting (item + shipping). */
 export function totalPrice(l: Listing): number {
   return l.price + (l.shippingPrice ?? 0);
+}
+
+/** A listing as sent to the browser: without the seller's text and raw
+ *  condition (up to ~2 KB each, only the server's seal analysis reads them),
+ *  which the status poll would otherwise resend every 1.5 s. */
+export function publicListing(l: Listing): Listing {
+  const out = { ...l };
+  delete out.sellerText;
+  delete out.sellerConditionRaw;
+  return out;
 }
 
 /** Per-source outcome fixed at search time (how many we got, or why not). */
@@ -165,6 +185,7 @@ export interface VisionResult {
     | "no_wrap"
     | "wrap"
     | "strip"
+    | "seller"
     | "unknown";
   // Some photo shows the game's case (front, back or spine). Marketplace
   // "New" only stands in for a seal on something that IS a boxed game.

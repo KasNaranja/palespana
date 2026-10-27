@@ -16,6 +16,7 @@ import {
   WallapopError,
 } from "@/lib/wallapop";
 import { searchListingsPlanned as searchEbay, EbayError } from "@/lib/ebay";
+import { publicListing } from "@/lib/types";
 import type {
   ApiError,
   ConsoleKey,
@@ -237,7 +238,7 @@ export async function POST(req: Request) {
 
   const res: SearchResponse = {
     search: meta,
-    listings,
+    listings: listings.map(publicListing),
     demoReason: demoReason(),
   };
   return NextResponse.json(res, { status: 200 });

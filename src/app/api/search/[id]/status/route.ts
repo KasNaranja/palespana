@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { countAnalyzed, getListings, getSearch, touchSearch } from "@/lib/db";
 import { startAnalysis } from "@/lib/analyzer";
-import { MARKET_SOURCES } from "@/lib/types";
+import { MARKET_SOURCES, publicListing } from "@/lib/types";
 import type {
   ApiError,
   MarketSource,
@@ -28,7 +28,7 @@ export async function GET(
   // it if it had been paused as abandoned — see the self-heal below).
   touchSearch(params.id);
 
-  const listings = getListings(params.id);
+  const listings = getListings(params.id).map(publicListing);
   const analyzed = countAnalyzed(params.id);
   const done = analyzed >= search.total;
 

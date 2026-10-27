@@ -86,10 +86,16 @@ function itemToListing(item: any): Listing | null {
   const country: string =
     item.location?.country_code || item.location?.countryCode || "ES";
 
+  const title = String(item.title?.original ?? item.title ?? "").trim();
+  const description = String(
+    item.description?.original ?? item.description ?? ""
+  ).trim();
+
   return {
     source: "wallapop",
     vintedId: String(item.id),
-    title: String(item.title ?? "").trim() || `Anuncio ${item.id}`,
+    title: title || `Anuncio ${item.id}`,
+    sellerText: `${title}\n${description}`.slice(0, 2000),
     price: amount,
     shippingPrice: null, // Wallapop shipping is quoted later; unknown up front
     currency: String(currency),
@@ -203,4 +209,39 @@ export async function searchListings(
   }
 
   return all;
+}
+
+// ── Declared condition (seal evidence) ────────────────────────
+// Search results don't carry the condition the seller picked, but the item
+// endpoint does (type_attributes.condition.value: "un_opened" = unopened,
+// "new", "as_good_as_new", "good"…). On 48 hand-labeled listings "un_opened"
+// appeared only on factory-sealed copies. Cheap: ~1 small JSON per listing,
+// and Wallapop showed no rate limit at 350+ requests/min. Cached per item.
+const conditionCache = new Map<string, string | null>();
+
+/** The seller-declared condition label; null if the item has none;
+ *  undefined if it couldn't be read (timeout, 429, 5xx, network): the caller
+ *  must not treat that as "no condition", since it might have said "used". */
+export async function fetchItemCondition(
+  itemId: string
+): Promise<string | null | undefined> {
+  if (conditionCache.has(itemId)) return conditionCache.get(itemId) ?? null;
+  try {
+    const res = await fetch(
+      `https://api.wallapop.com/api/v3/items/${encodeURIComponent(itemId)}`,
+      { headers: SEARCH_HEADERS, signal: AbortSignal.timeout(8000) }
+    );
+    if (!res.ok) return undefined; // transient: not cached, retried next time
+    const item: any = await res.json();
+    const value =
+      item?.type_attributes?.condition?.value ?? item?.condition?.value ?? null;
+    const condition = typeof value === "string" && value ? value : null;
+    conditionCache.set(itemId, condition);
+    if (conditionCache.size > 5000) {
+      conditionCache.delete(conditionCache.keys().next().value as string);
+    }
+    return condition;
+  } catch {
+    return undefined;
+  }
 }
