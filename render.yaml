@@ -94,6 +94,11 @@ services:
         sync: false
       - key: EBAY_CLIENT_SECRET
         sync: false
+      # Vinted through the owner's PC (worker/vinted-worker.mjs, see
+      # src/lib/vintedWorker.ts): same value as "token" in the PC's
+      # config.json. Takes precedence over Bright Data below.
+      - key: VINTED_WORKER_TOKEN
+        sync: false
       # Vinted through Bright Data's Web Unlocker (Vinted blocks Render's IP).
       # Optional: without the token Vinted is fetched directly (blocked here).
       # BRIGHTDATA_ZONE only if the zone isn't named "web_unlocker1".

@@ -5,6 +5,7 @@ import { getDatadomeStatus } from "@/lib/vintedCookie";
 import { getRuntimeStats } from "@/lib/runtimeStats";
 import { getEbayItemStats } from "@/lib/ebay";
 import { getVintedUnlockerStats } from "@/lib/vinted";
+import { getVintedWorkerStats } from "@/lib/vintedWorker";
 
 export const dynamic = "force-dynamic";
 
@@ -37,6 +38,8 @@ export async function GET() {
     ebayItems: getEbayItemStats(),
     // Vinted through Bright Data: on/off and how many requests today vs the cap.
     vintedUnlocker: getVintedUnlockerStats(),
+    // Vinted through the owner's PC: is it polling, pages served, wake-ups.
+    vintedWorker: getVintedWorkerStats(),
     cacheEnabled: config.cacheEnabled,
     maxListingsPerSource: COST_GUARD.MAX_LISTINGS_PER_SEARCH,
     sources: {

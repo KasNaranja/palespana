@@ -363,7 +363,7 @@ export async function startAnalysis(searchId: string): Promise<void> {
       // Through the metered Bright Data unlocker every item page counts
       // against the free tier: only the cheapest listings (pending is sorted
       // by price) get their full gallery; the rest are judged on the cover.
-      let detailBudget = config.vintedUnlocker.token
+      let detailBudget = config.vintedUnlocker.token && !config.vintedWorker.token
         ? config.vintedUnlocker.detailPagesPerSearch
         : Infinity;
       for (const l of pending) {

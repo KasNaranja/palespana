@@ -77,6 +77,11 @@ export const config = {
   // residential IPs and returns its raw HTML. Billed per successful request
   // after a free monthly allowance, so it's OFF unless the token is set, and
   // capped per search and per day to stay inside the free tier.
+  // Vinted fetched through the owner's PC (see vintedWorker.ts). Takes
+  // precedence over the unlocker when both are set.
+  vintedWorker: {
+    token: process.env.VINTED_WORKER_TOKEN?.trim() || "",
+  },
   vintedUnlocker: {
     token: process.env.BRIGHTDATA_API_TOKEN?.trim() || "",
     zone: process.env.BRIGHTDATA_ZONE?.trim() || "web_unlocker1",

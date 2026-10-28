@@ -25,6 +25,7 @@
 import { config } from "./config";
 import { searchPlanned } from "./searchPlan";
 import { getDatadomeCookie, markDatadomeOk } from "./vintedCookie";
+import { workerEnabled, workerGet } from "./vintedWorker";
 import type { ConsoleKey, Listing } from "./types";
 
 export type VintedErrorKind = "blocked" | "rate_limited" | "unavailable";
@@ -254,7 +255,35 @@ async function unlockerGet(pathWithQuery: string): Promise<string> {
   return res.text();
 }
 
+/** A Vinted page fetched by the owner's PC (see vintedWorker.ts). */
+async function pcGet(pathWithQuery: string): Promise<string> {
+  let r: { status: number; body: string };
+  try {
+    r = await workerGet(config.vintedHost, pathWithQuery);
+  } catch {
+    throw new VintedError(
+      "unavailable",
+      "Vinted solo funciona con el PC encendido y no responde ahora mismo."
+    );
+  }
+  if (r.status === 429) {
+    throw new VintedError("rate_limited", "Vinted está limitando peticiones.", 429);
+  }
+  if (r.status === 403) {
+    throw new VintedError("blocked", "Vinted bloqueó la petición (403).", 403);
+  }
+  if (r.status < 200 || r.status >= 300) {
+    throw new VintedError(
+      "unavailable",
+      r.status ? `Vinted respondió ${r.status}.` : "El PC no pudo contactar con Vinted.",
+      r.status || undefined
+    );
+  }
+  return r.body;
+}
+
 async function htmlGet(pathWithQuery: string, retryOnAuth = true): Promise<string> {
+  if (workerEnabled()) return pcGet(pathWithQuery);
   if (config.vintedUnlocker.token) return unlockerGet(pathWithQuery);
   await bootstrapSession();
   const session = cookieFetchedAt; // which session this request carries
@@ -454,7 +483,10 @@ export function catalogBudget(
   // Through the metered unlocker every page counts against the free tier.
   const unlocker = config.vintedUnlocker;
   return {
-    remaining: unlocker.token ? Math.min(max, unlocker.catalogPagesPerSearch) : max,
+    remaining:
+      unlocker.token && !config.vintedWorker.token
+        ? Math.min(max, unlocker.catalogPagesPerSearch)
+        : max,
   };
 }
 
