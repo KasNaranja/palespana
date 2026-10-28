@@ -382,6 +382,18 @@ async function retryMorePhotos(l, key) {
   const m = await morePhotos(l, key);
   if (!m.strip) {
     S.seen[key] = "0";
+    remember({
+      key,
+      source: l.source,
+      title: l.title,
+      price: l.price,
+      url: l.listingUrl,
+      photo: l.thumbUrl ?? l.photoUrls[0] ?? null,
+      strip: null,
+      reason: m.raw === "ilegible" ? "tira ilegible" : "repasado: sin tira",
+      sealed: "yes",
+      at: new Date().toISOString(),
+    });
     save();
     return;
   }
