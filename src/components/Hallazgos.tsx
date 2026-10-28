@@ -8,7 +8,14 @@ import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { formatPrice } from "@/lib/format";
 import { signalPc } from "@/lib/pcSignal";
-import { MARKET_LABELS, MARKET_SOURCES, type HuntFind, type HuntItem, type HuntSnapshot } from "@/lib/types";
+import {
+  MARKET_LABELS,
+  MARKET_SOURCES,
+  type HuntFind,
+  type HuntGame,
+  type HuntItem,
+  type HuntSnapshot,
+} from "@/lib/types";
 
 interface HuntResponse {
   enabled: boolean;
@@ -112,6 +119,89 @@ function FindCard({ f }: { f: HuntFind }) {
   );
 }
 
+const GAME_STATUS: Record<HuntGame["status"], string> = {
+  done: "hecho",
+  current: "ahora",
+  pending: "pendiente",
+};
+
+function Num({ n, strong }: { n: number; strong?: boolean }) {
+  return (
+    <td
+      className={[
+        "px-2 py-2 text-right tabular-nums",
+        n === 0 ? "text-texto-3" : strong ? "font-bold text-brand-500" : "text-texto-1",
+      ].join(" ")}
+    >
+      {n}
+    </td>
+  );
+}
+
+// Every copy of each game: the main view. Pending games are folded away.
+function GameTable({ games }: { games: HuntGame[] }) {
+  const [showPending, setShowPending] = useState(false);
+  const started = games.filter((g) => g.status !== "pending");
+  const pending = games.filter((g) => g.status === "pending");
+  const rows = showPending ? games : started;
+  return (
+    <div className="overflow-x-auto rounded-card border border-borde bg-panel">
+      <table className="w-full min-w-[560px] text-sm">
+        <thead>
+          <tr className="text-left text-xs text-texto-3">
+            <th className="px-3 py-2 font-medium">Juego</th>
+            <th className="px-2 py-2 text-right font-medium">Anuncios</th>
+            <th className="px-2 py-2 text-right font-medium">Precintados</th>
+            <th className="px-2 py-2 text-right font-medium">Tira PS4</th>
+            <th className="px-2 py-2 text-right font-medium">Tira PlayStation</th>
+            <th className="px-2 py-2 text-right font-medium">Raras</th>
+            <th className="px-2 py-2 text-right font-medium">Sin leer</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((g) => (
+            <tr
+              key={g.name}
+              className={["border-t border-borde", g.status === "current" ? "bg-white/5" : ""].join(" ")}
+            >
+              <td className="px-3 py-2">
+                <span className="capitalize text-texto-1">{g.name}</span>
+                <span
+                  className={[
+                    "ml-2 rounded px-1.5 py-0.5 text-[10px] font-bold uppercase",
+                    g.status === "current"
+                      ? "bg-verdict-esBg text-verdict-es"
+                      : g.status === "done"
+                        ? "bg-panel2 text-texto-2"
+                        : "text-texto-3",
+                  ].join(" ")}
+                >
+                  {GAME_STATUS[g.status]}
+                </span>
+              </td>
+              <Num n={g.seen} />
+              <Num n={g.sealed} />
+              <Num n={g.ps4} />
+              <Num n={g.playstation} />
+              <Num n={g.rare} strong />
+              <Num n={g.unread} />
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {pending.length > 0 && (
+        <button
+          type="button"
+          onClick={() => setShowPending((v) => !v)}
+          className="w-full border-t border-borde px-3 py-2 text-left text-xs text-texto-3 hover:text-texto-1"
+        >
+          {showPending ? "Ocultar pendientes" : `Ver los ${pending.length} juegos pendientes`}
+        </button>
+      )}
+    </div>
+  );
+}
+
 function RecentRow({ it }: { it: HuntItem }) {
   return (
     <a
@@ -183,7 +273,8 @@ export function Hallazgos() {
     <section className="pt-6">
       <h1 className="font-display text-3xl text-white">Hallazgos</h1>
       <p className="mt-1 max-w-2xl text-sm text-texto-2">
-        Tu PC recorre juegos de PS4 precintados en Vinted y Wallapop y lee la tira del precinto.
+        Tu PC recorre, juego a juego (PS4 de 2013 a 2017), todos sus anuncios en Vinted y Wallapop
+        y lee la tira del precinto de cada copia precintada.
         Las tiras raras (PSP, Blu-ray Disc, PS3…) son errores de fábrica y aparecen aquí.
       </p>
 
@@ -236,7 +327,7 @@ export function Hallazgos() {
             <div>
               <div className="mb-1 flex justify-between text-xs text-texto-3">
                 <span className="truncate">
-                  Búsqueda {Math.min(s.query.index + 1, s.query.total)} de {s.query.total}
+                  {s.games ? "Juego" : "Búsqueda"} {Math.min(s.query.index + 1, s.query.total)} de {s.query.total}
                   {s.query.text ? ` · «${s.query.text}»` : ""}
                   {s.query.source ? ` en ${MARKET_LABELS[s.query.source]}` : ""}
                 </span>
@@ -261,6 +352,33 @@ export function Hallazgos() {
             <Stat label="Tiras raras" value={s.finds.length} />
           </div>
 
+          {/* Finds */}
+          <div>
+            <h2 className="mb-3 font-display text-xl text-white">Tiras raras ({s.finds.length})</h2>
+            {s.finds.length === 0 ? (
+              <p className="text-sm text-texto-3">Todavía ninguna. Cuando aparezca una, saldrá aquí con su enlace.</p>
+            ) : (
+              <div className="grid grid-cols-2 gap-2.5 sm:gap-4 lg:grid-cols-3 xl:grid-cols-4">
+                {s.finds.map((f) => (
+                  <FindCard key={f.key} f={f} />
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Per game */}
+          {s.games && (
+            <div>
+              <h2 className="mb-3 font-display text-xl text-white">Resumen por juego</h2>
+              <GameTable games={s.games} />
+            </div>
+          )}
+
+          <details className="group rounded-card border border-borde bg-panel">
+            <summary className="cursor-pointer select-none px-3 py-2 text-sm text-texto-2 hover:text-texto-1">
+              Detalle por plataforma y motivos
+            </summary>
+            <div className="space-y-4 border-t border-borde p-3">
           {/* Per marketplace */}
           <div className="overflow-hidden rounded-card border border-borde bg-panel">
             <table className="w-full text-sm">
@@ -312,20 +430,8 @@ export function Hallazgos() {
                 </span>
               ))}
           </div>
-
-          {/* Finds */}
-          <div>
-            <h2 className="mb-3 font-display text-xl text-white">Tiras raras ({s.finds.length})</h2>
-            {s.finds.length === 0 ? (
-              <p className="text-sm text-texto-3">Todavía ninguna. Cuando aparezca una, saldrá aquí con su enlace.</p>
-            ) : (
-              <div className="grid grid-cols-2 gap-2.5 sm:gap-4 lg:grid-cols-3 xl:grid-cols-4">
-                {s.finds.map((f) => (
-                  <FindCard key={f.key} f={f} />
-                ))}
-              </div>
-            )}
-          </div>
+            </div>
+          </details>
 
           {/* Recent activity */}
           <div>

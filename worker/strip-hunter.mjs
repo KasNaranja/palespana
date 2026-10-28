@@ -59,14 +59,11 @@ const isPs4 = (title) => titleNamesConsole(title, "ps4") || !OTHER_CONSOLE.test(
 
 // Searches, most promising first. A wrong strip comes from a factory batch
 // sealed with leftover film from another line (PSP film was still around in
-// 2013–2017), so: titles with known misprints and sellers who already say so,
-// then that era's best sellers (more batches, more chances), then generic
-// searches, and last the late titles that almost surely carry the normal strip.
+// 2013–2017), so: titles with known misprints, then that era's best sellers
+// (more batches, more chances), then generic searches, and last the late
+// titles that almost surely carry the normal strip. No "tira psp"-style
+// searches: they mostly bring back games for other consoles.
 const KNOWN = ["battlefield 1", "broken sword"];
-const HINTS = [
-  "tira psp", "precinto psp", "tira blu-ray", "tira bluray", "precinto blu-ray",
-  "error precinto", "misprint ps4", "ps4 tira rara",
-];
 const ERA = [
   "fifa 15", "fifa 16", "fifa 17", "fifa 18", "pes 2015", "pes 2016", "pes 2017", "pes 2018",
   "call of duty advanced warfare", "call of duty black ops 3", "call of duty infinite warfare",
@@ -82,19 +79,27 @@ const ERA = [
   "lego", "just dance", "minecraft", "rocket league", "overwatch", "horizon zero dawn",
   "gran turismo sport", "crash bandicoot", "final fantasy xv", "resident evil 7",
 ];
-const LATE = [
-  "god of war", "spider-man", "red dead redemption 2", "days gone", "ghost of tsushima",
-  "detroit become human", "sekiro", "death stranding", "final fantasy vii remake",
-  "kingdom hearts 3", "resident evil 2", "battlefield v", "persona 5", "yakuza", "nioh",
-];
-const QUERIES = cfg.queries ?? [
-  ...KNOWN.map((t) => `${t} ps4 precintado`),
-  ...KNOWN.map((t) => `${t} ps4 nuevo`),
-  ...HINTS.map((h) => (h.includes("ps4") ? h : `${h} ps4`)),
-  ...ERA.map((t) => `${t} ps4 precintado`),
-  "ps4 precintado", "ps4 nuevo precintado", "juego ps4 precintado", "ps4 sin abrir", "ps4 sealed",
-  ...LATE.map((t) => `${t} ps4 precintado`),
-];
+// One search per game (hunter.json "queries" can replace the list), digging
+// through every page; only listings of that very game are looked at.
+const QUERIES = cfg.queries ?? [...KNOWN, ...ERA];
+
+// Strict match: every word of the game's name in the title ("battlefield 1"
+// must not take Battlefield 4 / V / Hardline), or the name written together
+// ("FIFA17").
+const ROMAN = { ii: "2", iii: "3", iv: "4", v: "5", vi: "6", vii: "7", xv: "15" };
+const words = (s) =>
+  s
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean)
+    .map((w) => ROMAN[w] ?? w);
+function isGame(title, game) {
+  const t = words(title);
+  const g = words(game);
+  return g.every((w) => t.includes(w)) || t.join("").includes(g.join(""));
+}
 
 // ── State (persists across restarts) ──
 const STATE_FILE = path.join(DIR, "hunter-state.json");
@@ -109,6 +114,7 @@ const blank = () => ({
     ebay: { seen: 0, analyzed: 0, stripRead: 0 },
   },
   sweep: { index: 0, startedAt: null, nextAt: null },
+  gameOf: {}, // listing key → the game search that found it first
   paused: false,
 });
 let S = fs.existsSync(STATE_FILE) ? { ...blank(), ...JSON.parse(fs.readFileSync(STATE_FILE, "utf8")) } : blank();
@@ -116,7 +122,7 @@ let S = fs.existsSync(STATE_FILE) ? { ...blank(), ...JSON.parse(fs.readFileSync(
 // didn't count it).
 for (const src of Object.keys(S.bySource)) S.bySource[src].stripRead = 0;
 for (const [k, v] of Object.entries(S.seen)) {
-  if (v && v !== "-" && v !== "0") S.bySource[k.split(":")[0]].stripRead++;
+  if (v && v !== "-" && v !== "0" && v !== "x") S.bySource[k.split(":")[0]].stripRead++;
 }
 let saveTimer = null;
 function save() {
@@ -155,8 +161,36 @@ function snapshot() {
     sources: SOURCES,
     recent: S.recent.slice(0, 30),
     finds: S.finds,
+    games: gameSummary(),
     updatedAt: new Date().toISOString(),
   };
+}
+
+// Per game, from what each of its listings ended up as (see S.seen).
+function gameSummary() {
+  const by = new Map(
+    QUERIES.map((name, i) => [
+      name,
+      {
+        name,
+        status: i < S.sweep.index ? "done" : i === S.sweep.index ? "current" : "pending",
+        seen: 0, sealed: 0, ps4: 0, playstation: 0, rare: 0, unread: 0,
+      },
+    ])
+  );
+  for (const [key, game] of Object.entries(S.gameOf)) {
+    const g = by.get(game);
+    if (!g) continue;
+    g.seen++;
+    const v = S.seen[key];
+    if (v === undefined || v === "-" || v === "x") continue;
+    g.sealed++;
+    if (v === "PS4") g.ps4++;
+    else if (v === "PlayStation") g.playstation++;
+    else if (v === "" || v === "0") g.unread++;
+    else g.rare++;
+  }
+  return [...by.values()];
 }
 
 async function push(force = false) {
@@ -317,7 +351,8 @@ async function morePhotos(l, key) {
   return out;
 }
 
-// S.seen values: a strip; "-" not a candidate; "0" analyzed, no strip after
+// S.seen values: a strip; "-" not a candidate; "x" analyzed, not sealed;
+// "0" analyzed, no strip after
 // every photo; "" analyzed by an older version on the first photo only, so it
 // gets the extra photos the next time a search returns it.
 async function handle(l) {
@@ -424,7 +459,7 @@ function record(l, key, strip, reason, sealed, stripPhoto) {
     sealed,
     at: new Date().toISOString(),
   };
-  S.seen[key] = strip ?? "0";
+  S.seen[key] = strip ?? (sealed === "no" ? "x" : "0");
   remember(item);
   log(`${key} ${strip ?? reason} · ${l.title}`);
   save();
@@ -449,16 +484,25 @@ async function confirmRare(item, stripPhoto, url) {
 }
 
 // ── Sweeps ──
-async function searchSource(source, q) {
-  if (source === "wallapop") return wallapop.searchListings(q, "ps4", 200);
-  if (source === "ebay") return ebay.searchListings(q, "ps4", 100);
-  const out = [];
-  for (let page = 1; page <= 3; page++) {
-    const got = await vinted.searchListings(q, "ps4", 96, page);
-    out.push(...got);
-    if (got.length < 40) break;
+// Every copy of the game: page on until the results run out, or until a whole
+// page (sorted by relevance) has no copy of the game left.
+const MAX_PAGES = 40;
+async function searchSource(source, game) {
+  const q = `${game} ps4`;
+  let all;
+  if (source === "wallapop") all = await wallapop.searchListings(q, "ps4", Infinity, MAX_PAGES);
+  else if (source === "ebay") all = await ebay.searchListings(q, "ps4", 200);
+  else {
+    all = [];
+    for (let page = 1; page <= MAX_PAGES; page++) {
+      await waitIfPaused();
+      statusText = `Buscando «${game}» en Vinted (página ${page})`;
+      const got = await vinted.searchListings(q, "ps4", 96, page);
+      all.push(...got);
+      if (got.length < 40 || !got.some((l) => isGame(l.title, game))) break;
+    }
   }
-  return out;
+  return all.filter((l) => isGame(l.title, game));
 }
 
 async function sweep() {
@@ -483,7 +527,12 @@ async function sweep() {
         if (/limit|429/i.test(e.message)) await sleep(60_000);
         continue;
       }
-      for (const l of listings) await handle(l);
+      const where = { vinted: "Vinted", wallapop: "Wallapop", ebay: "eBay" }[source];
+      statusText = `«${q}» en ${where}: ${listings.length} anuncios del juego`;
+      for (const l of listings) {
+        S.gameOf[`${l.source}:${l.vintedId}`] ??= q;
+        await handle(l);
+      }
     }
     save();
   }

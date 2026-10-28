@@ -188,10 +188,12 @@ async function fetchPage(
 export async function searchListings(
   query: string,
   consoleKey: ConsoleKey,
-  target: number
+  target: number,
+  // ≈40 raw items a page; 3 is enough depth to dig matches out of noise. The
+  // strip hunter on the owner's PC asks for far more to get every copy.
+  MAX_PAGES = 3
 ): Promise<Listing[]> {
   const keywords = wallapopKeywords(query, consoleKey);
-  const MAX_PAGES = 3; // ≈120 raw items; enough depth to dig matches out of noise
   const all: Listing[] = [];
   let nextToken: string | undefined;
 

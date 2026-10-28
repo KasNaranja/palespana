@@ -262,5 +262,18 @@ export interface HuntSnapshot {
   sources?: MarketSource[]; // marketplaces the hunter searches
   recent: HuntItem[]; // newest first, ~30
   finds: HuntFind[]; // every non-standard strip, newest first
+  games?: HuntGame[]; // per-game summary, in search order
   updatedAt: string;
+}
+
+/** One game the hunter searches, every copy of it on every marketplace. */
+export interface HuntGame {
+  name: string;
+  status: "done" | "current" | "pending";
+  seen: number; // listings of this game
+  sealed: number; // sealed copies analyzed
+  ps4: number; // "PS4" strips
+  playstation: number; // "PlayStation" strips
+  rare: number; // any other strip
+  unread: number; // sealed, strip not readable
 }
