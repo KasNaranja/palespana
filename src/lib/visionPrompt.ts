@@ -13,6 +13,7 @@
 import type {
   DetectedPlatform,
   LanguageVerdict,
+  SealStripText,
   SealedVerdict,
   VisionResult,
 } from "./types";
@@ -65,13 +66,45 @@ export const SYSTEM_PROMPT = `Eres un experto en videojuegos físicos del mercad
 3) "platform": consola de la caja por su diseño: "ps4" (funda AZUL, banda "PS4"), "ps5" (funda BLANCA, banda "PS5"), "ps3", "ps2", "ps1", "switch" (funda ROJA), "xbox", "pc", "other", "unknown" si dudas.
 
 4) Precinto de fábrica (solo lo que se VE):
-- "sealStrip": en PS4/PS5 PAL, el precinto nuevo lleva una TIRA ESTRECHA de apertura que forma parte del PLÁSTICO transparente del envoltorio, en el borde INFERIOR de la portada, con la palabra "PlayStation" (o "PS4"/"PS5") repetida muchas veces en letra pequeña a lo largo de toda la tira; en Switch es una tira roja con "Nintendo Switch". OJO: TODAS las carátulas de PS4/PS5 llevan IMPRESA arriba la banda del logotipo "PS4 / PlayStation 4": eso es diseño de la carátula, NO es la tira de precinto. "visible" solo si ves claramente esa tira del plástico; "not_visible" si ves bien el borde inferior de la portada y no está; "unclear" en otro caso.
+- "sealStrip": en PS4/PS5 PAL, el precinto nuevo lleva una TIRA ESTRECHA de apertura que forma parte del PLÁSTICO transparente del envoltorio. Cruza la portada en HORIZONTAL, de lado a lado, en su parte INFERIOR (a menudo a unos tres cuartos de la altura, a la altura del logo PEGI o justo encima de los logos de abajo), como una fila de letras pequeñas grises o plateadas repetidas muchas veces: el símbolo de PlayStation con "PS4" (o "PS5"), o la palabra "PlayStation". En Switch es una tira roja con "Nintendo Switch". OJO: TODAS las carátulas de PS4/PS5 llevan IMPRESA arriba la banda del logotipo "PS4 / PlayStation 4": eso es diseño de la carátula, NO es la tira de precinto. "visible" solo si ves claramente esa tira del plástico; "not_visible" si ves bien la parte inferior de la portada y no está; "unclear" en otro caso.
+- "sealStripText": si la tira es "visible", LEE sus letras repetidas: "PS4" si se repite el símbolo de PlayStation seguido de PS4; "PS5" si se repite con PS5; "PlayStation" si se repite la palabra completa PlayStation; "sin_letras" si la tira no lleva letras (p. ej. la roja de Switch o una tira lisa); "ilegible" si ves la tira pero no puedes leer sus letras. "no_hay_tira" si "sealStrip" no es "visible". Nunca la confundas con la banda impresa de arriba de la carátula.
 - "shrinkWrap": plástico que envuelve la caja. "factory" = película retráctil de fábrica, AJUSTADA a la caja como una segunda piel, con pliegues o arrugas, solapas dobladas en esquinas o lomo, o su costura/soldadura. "loose_sleeve" = funda o bolsa protectora SUELTA, más grande que la caja (holgada, con solapa o abertura, típica de tiendas de segunda mano). "not_visible" si la caja se ve claramente sin plástico. "unclear" en otro caso. Un brillo o reflejo de la carátula NO es plástico. MUY IMPORTANTE: TODAS las cajas de PS4/PS5/Switch/Xbox tienen de serie una LÁMINA TRANSPARENTE que cubre la carátula por fuera (es la funda de la propia caja, donde va metida la portada impresa): sus reflejos, brillos y ondulaciones sobre la portada NO son precinto, existen también en copias usadas. El precinto de fábrica envuelve la caja ENTERA y se reconoce en los BORDES y ESQUINAS (pliegues, solapas dobladas, soldadura, el plástico sobresaliendo del borde); si no ves nada de eso en los bordes, responde "not_visible" o "unclear", nunca "factory".
 - "usedLabel": true si alguna etiqueta o pegatina (de tienda, de precio o del vendedor) indica que es de SEGUNDA MANO o gradúa su estado: "Estado: Muy bueno/Bueno/Aceptable", "Usado", "Seminuevo", "Segunda mano", "Usato", "Occasion", "Pre-owned", "Pre-played". false en otro caso. Una pegatina de PRECIO de una tienda de juegos nuevos (FNAC, GAME, MediaMarkt, El Corte Inglés, Carrefour, Amazon…) NO es una etiqueta de segunda mano: solo cuenta si su texto dice expresamente usado, seminuevo o un estado de uso.
 
 5) "notes": UNA frase en español con lo más relevante que has visto (qué fotos hay, idioma, precinto).`;
 
 export const USER_PROMPT = `Describe estas fotos siguiendo exactamente el formato pedido.`;
+
+// Appended to SYSTEM_PROMPT when the request carries the magnifier tiles (see
+// magnifier.ts), so the model neither misses them nor counts them as photos.
+export const MAGNIFIER_NOTE =
+  "\n\nLas imágenes rotuladas «Ampliación» son la Foto 1 dividida en cuatro trozos ampliados, para que veas detalles pequeños (como la tira de apertura del plástico y sus letras, o los pliegues del precinto en las esquinas). No son fotos nuevas: no las cuentes en \"photos\".";
+
+export interface ImagePart {
+  mimeType: string;
+  data: string; // base64
+}
+
+/** The user turn: every photo numbered ("Foto 1:"…) so the model can say
+ *  WHICH photo shows the disc, then the magnifier tiles of photo 1, labeled. */
+export function userParts(
+  photos: ImagePart[],
+  tiles: { name: string; part: ImagePart }[] = []
+): object[] {
+  return [
+    ...photos.flatMap((p, i) => [
+      { text: `Foto ${i + 1}:` },
+      { inline_data: { mime_type: p.mimeType, data: p.data } },
+    ]),
+    ...tiles.flatMap((t) => [
+      { text: `Ampliación de la Foto 1 (${t.name}):` },
+      { inline_data: { mime_type: t.part.mimeType, data: t.part.data } },
+    ]),
+    { text: USER_PROMPT },
+  ];
+}
+
+const STRIP_TEXTS = ["PS4", "PS5", "PlayStation", "sin_letras", "ilegible", "no_hay_tira"] as const;
 
 export const RESPONSE_SCHEMA = {
   type: "object",
@@ -97,6 +130,7 @@ export const RESPONSE_SCHEMA = {
     frontLanguage: { type: "string", enum: [...LANGS, "none"] },
     platform: { type: "string", enum: [...PLATFORMS] },
     sealStrip: { type: "string", enum: ["visible", "not_visible", "unclear"] },
+    sealStripText: { type: "string", enum: [...STRIP_TEXTS] },
     shrinkWrap: {
       type: "string",
       enum: ["factory", "loose_sleeve", "not_visible", "unclear"],
@@ -113,6 +147,7 @@ export const RESPONSE_SCHEMA = {
     "frontLanguage",
     "platform",
     "sealStrip",
+    "sealStripText",
     "shrinkWrap",
     "usedLabel",
     "notes",
@@ -128,6 +163,7 @@ export interface Observations {
   frontLanguage: string;
   platform: string;
   sealStrip: string;
+  sealStripText: string;
   shrinkWrap: string;
   usedLabel: boolean;
   notes: string;
@@ -187,9 +223,11 @@ export function decide(obs: Observations): VisionResult {
   let sealed: SealedVerdict = "unknown";
   let sealWhy = "";
   let sealReason: VisionResult["sealReason"] = "unknown";
-  // Measured on 47 labeled real listings: the models rarely manage to see
-  // the bottom tear strip even on sealed copies (reported on 3 of 18), but
-  // they reliably see a factory shrink-wrap (18/18 on gemini-3.1-flash-lite).
+  // Measured on 47 labeled real listings: without the magnifier the models
+  // rarely saw the tear strip (3 of 18 sealed copies); with it they read its
+  // letters on 21 of 22 where blind reviewers could, never inventing one
+  // (gemini-3.5-flash-lite, 74 listings). The factory shrink-wrap is seen
+  // reliably either way (18/18).
   // So the wrap counts on its own — as long as nothing says "opened" or
   // "used": a disc/interior/manual photo, a loose shop sleeve instead of the
   // tight factory film, or a shop label grading the condition (the one false
@@ -216,6 +254,22 @@ export function decide(obs: Observations): VisionResult {
       obs.shrinkWrap === "loose_sleeve"
         ? "funda protectora suelta, no precinto de fábrica"
         : "sin plástico de fábrica";
+  }
+
+  // The strip's letters, kept only for a copy the photos don't show opened
+  // and only when the strip itself was seen (a guess at the letters of an
+  // unseen strip must never reach the filter). "PS4" and "PS5" in tiny print
+  // follow the box's platform when it's known: a PS4 game never ships in a
+  // PS5 strip.
+  let stripText: SealStripText | null = null;
+  if (sealed !== "no" && obs.sealStrip === "visible") {
+    if (obs.sealStripText === "PlayStation") stripText = "PlayStation";
+    else if (obs.sealStripText === "PS4" || obs.sealStripText === "PS5") {
+      stripText = platform === "ps4" ? "PS4" : platform === "ps5" ? "PS5" : obs.sealStripText;
+    }
+  }
+  if (stripText && sealReason === "strip") {
+    sealWhy = `precintado (tira de apertura del plástico visible, con «${stripText}»)`;
   }
 
   // ── Language ──
@@ -276,7 +330,7 @@ export function decide(obs: Observations): VisionResult {
   const sawCase = obs.photos.some((p) =>
     ["front_cover", "back_cover", "spine_or_side"].includes(p.content)
   );
-  return { verdict, evidence, platform, sealed, sealReason, sawCase };
+  return { verdict, evidence, platform, sealed, sealReason, sawCase, stripText };
 }
 
 /** Parse the model's JSON reply into observations (null if unusable). */
@@ -305,6 +359,7 @@ export function parseObservations(text: string): Observations | null {
     frontLanguage: str(o.frontLanguage, "none"),
     platform: str(o.platform, "unknown"),
     sealStrip: str(o.sealStrip, "unclear"),
+    sealStripText: str(o.sealStripText, "no_hay_tira"),
     shrinkWrap: str(o.shrinkWrap, "unclear"),
     usedLabel: o.usedLabel === true,
     notes: str(o.notes, ""),

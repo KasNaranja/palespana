@@ -135,7 +135,9 @@ export function ListingCard({ listing }: { listing: Listing }) {
             // language badges, so it can't be confused with the amber
             // "No concluyente" verdict): a physical-state tag, not a verdict.
             <span
-              title="Copia nueva con el precinto de fábrica intacto"
+              title={`Copia nueva con el precinto de fábrica intacto${
+                listing.sealStrip ? ` (tira del plástico con «${listing.sealStrip}»)` : ""
+              }`}
               className="inline-flex max-w-full items-center gap-1 rounded-full border border-transparent bg-gold-500 px-1.5 py-0.5 text-[11px] font-bold text-carbon shadow-sm sm:gap-1.5 sm:px-2.5 sm:py-1 sm:text-xs"
             >
               <svg
@@ -163,6 +165,12 @@ export function ListingCard({ listing }: { listing: Listing }) {
                 />
               </svg>
               <span className="truncate">Precintado</span>
+              {/* What the seal's tear strip says, when it was read. */}
+              {listing.sealStrip && (
+                <span className="shrink-0 rounded bg-carbon/85 px-1 text-[10px] leading-4 text-gold-400 sm:text-[11px]">
+                  {listing.sealStrip}
+                </span>
+              )}
             </span>
           )}
           <LanguageBadge

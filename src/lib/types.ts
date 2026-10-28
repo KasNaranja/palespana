@@ -41,6 +41,11 @@ export type DetectedPlatform =
 // "unknown" = can't tell from the photos (default → never guessed as sealed).
 export type SealedVerdict = "yes" | "no" | "unknown";
 
+// What the tear strip of a sealed PS4/PS5 copy says, read off the photos: the
+// console logo repeated ("PS4"/"PS5") or the word "PlayStation" repeated.
+// Collectors tell print runs apart by it. null = not seen or not legible.
+export type SealStripText = "PS4" | "PS5" | "PlayStation";
+
 // Marketplaces CazaPAL searches. Each listing carries its source so the UI can
 // show two independent progress bars and tag every card.
 export type MarketSource = "vinted" | "wallapop" | "ebay";
@@ -113,6 +118,7 @@ export interface Listing {
   verdictEvidence: string | null; // one sentence in Spanish
   detectedPlatform?: DetectedPlatform; // console read from the box art by the AI
   sealed?: SealedVerdict; // "yes" = new copy with the factory seal intact
+  sealStrip?: SealStripText | null; // tear-strip letters, only when sealed "yes"
   analyzedAt: string | null; // ISO timestamp
 }
 
@@ -190,6 +196,8 @@ export interface VisionResult {
   // Some photo shows the game's case (front, back or spine). Marketplace
   // "New" only stands in for a seal on something that IS a boxed game.
   sawCase?: boolean;
+  // Letters on the tear strip, when the strip was seen and read.
+  stripText?: SealStripText | null;
 }
 
 export interface ApiError {

@@ -127,7 +127,8 @@ async function analyzeOneLive(
       nowIso(),
       !(conditionUnavailable && result.sealed === "yes"),
       result.platform,
-      result.sealed
+      result.sealed,
+      result.stripText ?? null
     );
     return true;
   } catch (e) {
@@ -279,10 +280,12 @@ export async function startAnalysis(searchId: string): Promise<void> {
       // the seal filter can actually show (es / es_multi), so each old Spanish
       // copy is re-analyzed just once and re-cached with a real seal verdict,
       // without re-burning the Gemini quota for the whole cache.
+      // Same for sealed copies cached before the tear strip was read: the
+      // "Tira" filter would never see them.
       const needsSeal =
         !!c &&
         (c.verdict === "es" || c.verdict === "es_multi") &&
-        c.sealed === undefined;
+        (c.sealed === undefined || (c.sealed === "yes" && c.sealStrip === undefined));
       if (c && c.verdict !== "pending" && !needsSeal) {
         updateListingVerdict(
           searchId,
@@ -293,7 +296,8 @@ export async function startAnalysis(searchId: string): Promise<void> {
           c.analyzedAt,
           true,
           c.platform ?? "unknown",
-          c.sealed ?? "unknown"
+          c.sealed ?? "unknown",
+          c.sealStrip ?? null
         );
       } else {
         pending.push(l);

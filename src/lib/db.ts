@@ -18,6 +18,7 @@ import type {
   Listing,
   LanguageVerdict,
   MarketSource,
+  SealStripText,
   SealedVerdict,
   SearchMeta,
 } from "./types";
@@ -28,6 +29,7 @@ interface CacheEntry {
   analyzedAt: string;
   platform?: DetectedPlatform;
   sealed?: SealedVerdict;
+  sealStrip?: SealStripText | null;
 }
 
 function resolveFile(): string {
@@ -115,6 +117,7 @@ export interface CachedVerdict {
   analyzedAt: string;
   platform?: DetectedPlatform;
   sealed?: SealedVerdict;
+  sealStrip?: SealStripText | null;
 }
 
 /** Cache key namespaced by source so ids that collide across marketplaces never
@@ -176,11 +179,12 @@ export function setCachedVerdict(
   evidence: string | null,
   analyzedAt: string,
   platform: DetectedPlatform = "unknown",
-  sealed: SealedVerdict = "unknown"
+  sealed: SealedVerdict = "unknown",
+  sealStrip: SealStripText | null = null
 ): void {
   if (!config.cacheEnabled) return; // nothing is stored
   const ck = cacheKey(source, vintedId);
-  const entry: CacheEntry = { verdict, evidence, analyzedAt, platform, sealed };
+  const entry: CacheEntry = { verdict, evidence, analyzedAt, platform, sealed, sealStrip };
   _cache[ck] = entry; // L1
   if (redisEnabled) {
     // Fire-and-forget persistent write; never blocks analysis.
@@ -287,8 +291,11 @@ export function updateListingVerdict(
   analyzedAt: string,
   persist = true,
   platform: DetectedPlatform = "unknown",
-  sealed: SealedVerdict = "unknown"
+  sealed: SealedVerdict = "unknown",
+  sealStrip: SealStripText | null = null
 ): void {
+  // The strip's letters only mean something on a sealed copy.
+  const strip = sealed === "yes" ? sealStrip : null;
   const rec = searches.get(searchId);
   if (rec) {
     const l = rec.listings.find(
@@ -299,6 +306,7 @@ export function updateListingVerdict(
       l.verdictEvidence = evidence;
       l.detectedPlatform = platform;
       l.sealed = sealed;
+      l.sealStrip = strip;
       l.analyzedAt = analyzedAt;
     }
   }
@@ -310,7 +318,8 @@ export function updateListingVerdict(
       evidence,
       analyzedAt,
       platform,
-      sealed
+      sealed,
+      strip
     );
   }
 }

@@ -11,21 +11,19 @@
 
 import { config, COST_GUARD } from "./config";
 import type { VisionResult } from "./types";
+import { magnifierTiles } from "./magnifier";
 import {
+  MAGNIFIER_NOTE,
   RESPONSE_SCHEMA,
   SYSTEM_PROMPT,
-  USER_PROMPT,
   decide,
   parseObservations,
+  userParts,
+  type ImagePart,
 } from "./visionPrompt";
 
 const MAX_BYTES = 5 * 1024 * 1024; // keep well under Gemini limits
 const ALLOWED = new Set(["image/jpeg", "image/png", "image/webp"]);
-
-interface ImagePart {
-  mimeType: string;
-  data: string; // base64
-}
 
 async function downloadImage(url: string): Promise<ImagePart | null> {
   try {
@@ -121,6 +119,7 @@ const stats = {
     detail: { n: 0, ms: 0, fail: 0 }, // Vinted item page (gallery)
     download: { n: 0, ms: 0, fail: 0 }, // photos for one listing
     gemini: { n: 0, ms: 0, fail: 0 }, // model call(s) for one listing
+    magnifier: { n: 0, ms: 0, fail: 0 }, // cutting photo 1 into quarters
   },
 };
 
@@ -224,21 +223,17 @@ export async function analyzeImages(imageUrls: string[]): Promise<VisionResult> 
     throw new Error("image_download_failed");
   }
 
+  // The tear strip's letters and the wrap's corner folds are too small to
+  // see in a whole-cover photo: photo 1's quarters go along (magnifier.ts).
+  const mgStart = Date.now();
+  const tiles = await magnifierTiles(parts[0]);
+  notePhase("magnifier", mgStart, tiles.length === 0);
+
   const body = {
-    systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
-    contents: [
-      {
-        role: "user",
-        // Numbered so the model can say WHICH photo shows the disc, etc.
-        parts: [
-          ...parts.flatMap((p, i) => [
-            { text: `Foto ${i + 1}:` },
-            { inline_data: { mime_type: p.mimeType, data: p.data } },
-          ]),
-          { text: USER_PROMPT },
-        ],
-      },
-    ],
+    systemInstruction: {
+      parts: [{ text: tiles.length ? SYSTEM_PROMPT + MAGNIFIER_NOTE : SYSTEM_PROMPT }],
+    },
+    contents: [{ role: "user", parts: userParts(parts, tiles) }],
     generationConfig: {
       responseMimeType: "application/json",
       responseSchema: RESPONSE_SCHEMA,
