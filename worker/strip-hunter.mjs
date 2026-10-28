@@ -1,5 +1,5 @@
-// ─────────────────────────────────────────────────────────────
-// Strip hunter — runs on the owner's PC next to vinted-worker.mjs.
+﻿// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// Strip hunter â€” runs on the owner's PC next to vinted-worker.mjs.
 //
 // Walks sealed PS4 listings on Vinted and Wallapop and reads the factory
 // seal's tear strip with the same vision pipeline as the website (photos +
@@ -18,7 +18,7 @@
 // hunter.json: {"server", "token", "geminiKeys": "k1,k2", "queries"?: [...]}.
 //   npx tsc src/lib/*.ts --outDir <dir>/lib --module commonjs --target es2020
 //     --esModuleInterop --skipLibCheck --moduleResolution node
-// ─────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 import { createHash } from "node:crypto";
 import fs from "node:fs";
@@ -53,11 +53,11 @@ const { titleNamesConsole } = lib("filter.js");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const SWEEP_PAUSE_MS = 6 * 3600_000;
 const STANDARD = new Set(["PS4", "PlayStation"]);
-const OTHER_CONSOLE = /\b(ps5|ps3|ps2|switch|xbox|psp|vita|pc|wii|3ds)\b/i;
+const OTHER_CONSOLE = /\b(ps5|ps3|ps2|ps1|switch|xbox|psp|vita|pc|wii|3ds|nds|gba|game ?boy|game ?cube|nintendo|sega|baraja|cartas|libro|figura|funko|camiseta|poster|guía)\b/i;
 
 // Searches, most promising first. A wrong strip comes from a factory batch
 // sealed with leftover film from another line (PSP film was still around in
-// 2013–2017), so: titles with known misprints and sellers who already say so,
+// 2013â€“2017), so: titles with known misprints and sellers who already say so,
 // then that era's best sellers (more batches, more chances), then generic
 // searches, and last the late titles that almost surely carry the normal strip.
 const KNOWN = ["battlefield 1", "broken sword"];
@@ -94,10 +94,10 @@ const QUERIES = cfg.queries ?? [
   ...LATE.map((t) => `${t} ps4 precintado`),
 ];
 
-// ── State (persists across restarts) ──
+// â”€â”€ State (persists across restarts) â”€â”€
 const STATE_FILE = path.join(DIR, "hunter-state.json");
 const blank = () => ({
-  seen: {}, // key → strip read ("" = analyzed, no strip; "-" = skipped, not a candidate)
+  seen: {}, // key â†’ strip read ("" = analyzed, no strip; "-" = skipped, not a candidate)
   finds: [],
   recent: [],
   counts: { seen: 0, candidates: 0, analyzed: 0, stripRead: 0, byStrip: {}, errors: 0 },
@@ -134,9 +134,9 @@ function log(msg) {
   } catch {}
 }
 
-// ── Snapshot for the dashboard ──
+// â”€â”€ Snapshot for the dashboard â”€â”€
 let status = "running";
-let statusText = "Arrancando…";
+let statusText = "Arrancandoâ€¦";
 let current = { text: "", source: null };
 let watching = true; // until the server says otherwise
 let lastPush = 0;
@@ -199,7 +199,7 @@ function onCommand(cmd) {
     S.paused = false;
     S.sweep.nextAt = null; // Play during the rest between sweeps: start now
     status = "running";
-    statusText = "Reanudando…";
+    statusText = "Reanudandoâ€¦";
     log("play pedido desde la web");
     save();
     interrupt();
@@ -247,7 +247,7 @@ async function listen() {
   }
 }
 
-// ── One listing ──
+// â”€â”€ One listing â”€â”€
 function remember(item) {
   S.recent.unshift(item);
   S.recent = S.recent.slice(0, 30);
@@ -260,7 +260,7 @@ async function vision(urls) {
     } catch (e) {
       if (String(e.message).includes("all_keys_exhausted")) {
         status = "waiting_quota";
-        statusText = "La IA no responde o se acabó la cuota de hoy; reintento en 15 min.";
+        statusText = "La IA no responde o se acabÃ³ la cuota de hoy; reintento en 15 min.";
         push(true);
         await sleep(15 * 60_000);
         status = "running";
@@ -339,7 +339,7 @@ async function handle(l) {
   };
   S.seen[key] = strip ?? "";
   remember(item);
-  log(`${key} ${strip ?? reason} · ${l.title}`);
+  log(`${key} ${strip ?? reason} Â· ${l.title}`);
 
   if (strip && !STANDARD.has(strip)) {
     // Rare: read it again from the front photo alone; both must agree.
@@ -360,7 +360,7 @@ async function handle(l) {
   save();
 }
 
-// ── Sweeps ──
+// â”€â”€ Sweeps â”€â”€
 async function searchSource(source, q) {
   if (source === "wallapop") return wallapop.searchListings(q, "ps4", 200);
   if (source === "ebay") return ebay.searchListings(q, "ps4", 100);
@@ -385,13 +385,13 @@ async function sweep() {
     const q = QUERIES[S.sweep.index];
     for (const source of SOURCES) {
       current = { text: q, source };
-      statusText = `Buscando «${q}» en ${{ vinted: "Vinted", wallapop: "Wallapop", ebay: "eBay" }[source]}`;
+      statusText = `Buscando Â«${q}Â» en ${{ vinted: "Vinted", wallapop: "Wallapop", ebay: "eBay" }[source]}`;
       let listings = [];
       try {
         listings = await searchSource(source, q);
       } catch (e) {
         S.counts.errors++;
-        log(`error búsqueda ${source} «${q}»: ${e.message}`);
+        log(`error bÃºsqueda ${source} Â«${q}Â»: ${e.message}`);
         if (/limit|429/i.test(e.message)) await sleep(60_000);
         continue;
       }
@@ -403,7 +403,7 @@ async function sweep() {
   save();
 }
 
-log(`arrancado; ${QUERIES.length} búsquedas, ${Object.keys(S.seen).length} anuncios ya vistos`);
+log(`arrancado; ${QUERIES.length} bÃºsquedas, ${Object.keys(S.seen).length} anuncios ya vistos`);
 listen();
 for (;;) {
   try {
