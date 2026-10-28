@@ -53,7 +53,9 @@ const { titleNamesConsole } = lib("filter.js");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const SWEEP_PAUSE_MS = 6 * 3600_000;
 const STANDARD = new Set(["PS4", "PlayStation"]);
-const OTHER_CONSOLE = /\b(ps5|ps3|ps2|ps1|switch|xbox|psp|vita|pc|wii|3ds|nds|gba|game ?boy|game ?cube|nintendo|sega|evercade|baraja|cartas|libro|figura|funko|camiseta|poster|guía)\b/i;
+const OTHER_CONSOLE =
+  /(ps5|ps3|ps2|ps1|psx|switch|xbox|x360|psp|vita|pc|wii|3ds|nds|ds|n64|gba|game ?boy|game ?cube|nintendo|sega|dreamcast|evercade|baraja|cartas|libro|figura|funko|camiseta|poster|guía)(?![a-z])/i;
+const isPs4 = (title) => titleNamesConsole(title, "ps4") || !OTHER_CONSOLE.test(title);
 
 // Searches, most promising first. A wrong strip comes from a factory batch
 // sealed with leftover film from another line (PSP film was still around in
@@ -88,7 +90,7 @@ const LATE = [
 const QUERIES = cfg.queries ?? [
   ...KNOWN.map((t) => `${t} ps4 precintado`),
   ...KNOWN.map((t) => `${t} ps4 nuevo`),
-  ...HINTS,
+  ...HINTS.map((h) => (h.includes("ps4") ? h : `${h} ps4`)),
   ...ERA.map((t) => `${t} ps4 precintado`),
   "ps4 precintado", "ps4 nuevo precintado", "juego ps4 precintado", "ps4 sin abrir", "ps4 sealed",
   ...LATE.map((t) => `${t} ps4 precintado`),
@@ -323,7 +325,7 @@ async function handle(l) {
   S.bySource[l.source].seen++;
   const text = `${l.sellerText ?? l.title}`;
   // Only sealed PS4 games: a strip exists only on a sealed copy.
-  const ps4 = titleNamesConsole(l.title, "ps4") || !OTHER_CONSOLE.test(l.title);
+  const ps4 = isPs4(l.title);
   const claim = textSealClaim(text, l.title);
   if (!ps4 || claim === "opened" || isLot(l.title, text) || l.photoUrls.length === 0) {
     S.seen[key] = "-";
@@ -372,6 +374,10 @@ async function handle(l) {
 }
 
 async function retryMorePhotos(l, key) {
+  if (!isPs4(l.title)) {
+    S.seen[key] = "-";
+    return;
+  }
   await waitIfPaused();
   const m = await morePhotos(l, key);
   if (!m.strip) {
