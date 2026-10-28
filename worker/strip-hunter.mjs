@@ -54,7 +54,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const SWEEP_PAUSE_MS = 6 * 3600_000;
 const STANDARD = new Set(["PS4", "PlayStation"]);
 const OTHER_CONSOLE =
-  /(ps5|ps3|ps2|ps1|psx|switch|xbox|x360|psp|vita|pc|wii|3ds|nds|ds|n64|gba|game ?boy|game ?cube|nintendo|sega|dreamcast|evercade|baraja|cartas|libro|figura|funko|camiseta|poster|guía)(?![a-z])/i;
+  /\b(ps5|ps3|ps2|ps1|psx|switch|xbox|x360|psp|vita|pc|wii|3ds|nds|ds|n64|gba|game ?boy|game ?cube|nintendo|sega|dreamcast|evercade|baraja|cartas|libro|figura|funko|camiseta|poster|guía)(?![a-z])/i;
 const isPs4 = (title) => titleNamesConsole(title, "ps4") || !OTHER_CONSOLE.test(title);
 
 // Searches, most promising first. A wrong strip comes from a factory batch
