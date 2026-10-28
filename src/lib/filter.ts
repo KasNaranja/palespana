@@ -547,16 +547,19 @@ export function titleNamesConsole(title: string, sel: ConsoleKey): boolean {
 }
 
 /**
- * Final keep/hide decision for the console chip, combining both signals:
- * keep if the TITLE confirms the console, OR the AI didn't confidently read a
- * different one. Only ambiguous-title copies can be hidden by the AI.
+ * Final keep/hide decision for the console chip. What the AI read off the box
+ * art wins: with PS4 chosen, a copy whose case the AI confidently reads as
+ * another console is hidden even when the seller's title says "PS4" (titles
+ * like "Xenoverse 2 PS4" on a Switch or PS5 copy were showing up). Titles
+ * naming another console are already dropped at search time (consoleAllows);
+ * only an AI "unknown" keeps a copy on the title's word alone.
  */
 export function consoleKeep(
   title: string,
   detected: DetectedPlatform | undefined,
   sel: ConsoleKey
 ): boolean {
-  return titleNamesConsole(title, sel) || platformMatchesConsole(detected, sel);
+  return platformMatchesConsole(detected, sel);
 }
 
 /** Remove duplicate vintedIds, keeping the first occurrence (Vinted paginates

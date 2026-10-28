@@ -15,6 +15,10 @@ const STRIP_OPTIONS: { key: StripKey; label: string; always: boolean }[] = [
   { key: "PS4", label: "Tira PS4", always: true },
   { key: "PlayStation", label: "Tira PlayStation", always: true },
   { key: "PS5", label: "Tira PS5", always: false },
+  { key: "PS3", label: "Tira PS3", always: false },
+  { key: "PSP", label: "Tira PSP", always: false },
+  { key: "PS Vita", label: "Tira PS Vita", always: false },
+  { key: "Blu-ray Disc", label: "Tira Blu-ray Disc", always: false },
   { key: "none", label: "Tira sin identificar", always: false },
 ];
 
@@ -121,6 +125,10 @@ export function Results({
       PS4: 0,
       PS5: 0,
       PlayStation: 0,
+      PS3: 0,
+      PSP: 0,
+      "PS Vita": 0,
+      "Blu-ray Disc": 0,
       none: 0,
     };
     for (const l of sealedList) counts[stripOf(l)]++;

@@ -158,10 +158,8 @@ export default function Home() {
   }, [active]);
 
   // Base listings from the live poll (or the initial payload before the first
-  // poll). Keep a listing if its TITLE names the search's console (seller is
-  // authoritative) OR the AI didn't confidently read a DIFFERENT one. So only
-  // ambiguous-title copies (e.g. a PS3 disc titled just "The Evil Within") get
-  // hidden by the AI; a listing that says "PS4" is never dropped by a misread.
+  // poll), minus copies the AI confidently read as a DIFFERENT console than
+  // the chip — even if the title names the chip's console (see consoleKeep).
   const listings = (status.data?.listings ?? active?.initial ?? []).filter((l) =>
     consoleKeep(l.title, l.detectedPlatform, active?.console ?? "todas")
   );

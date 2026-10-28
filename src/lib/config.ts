@@ -60,9 +60,12 @@ export const config = {
   // listings: gemma-4-26b-a4b-it never over-claimed a seal or Spanish, answers
   // in a steady ~3.5 s and took 25+ requests/min without a single 429/503;
   // gemini-3.5-flash-lite is accurate but capped at 15/min per project.
+  // 3.5 goes first since the seal's tear strip is read: with the magnifier it
+  // read the letters on 25 of 26 sealed copies, while gemma missed them on a
+  // real listing (Lost Judgment, "PlayStation" strip) on a day 3.1 was down.
   geminiFallbackModels: (
     process.env.GEMINI_FALLBACK_MODELS ||
-    "gemma-4-26b-a4b-it,gemini-3.5-flash-lite"
+    "gemini-3.5-flash-lite,gemma-4-26b-a4b-it"
   )
     .split(",")
     .map((m) => m.trim())

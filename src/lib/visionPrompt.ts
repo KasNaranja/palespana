@@ -67,7 +67,7 @@ export const SYSTEM_PROMPT = `Eres un experto en videojuegos físicos del mercad
 
 4) Precinto de fábrica (solo lo que se VE):
 - "sealStrip": en PS4/PS5 PAL, el precinto nuevo lleva una TIRA ESTRECHA de apertura que forma parte del PLÁSTICO transparente del envoltorio. Cruza la portada en HORIZONTAL, de lado a lado, en su parte INFERIOR (a menudo a unos tres cuartos de la altura, a la altura del logo PEGI o justo encima de los logos de abajo), como una fila de letras pequeñas grises o plateadas repetidas muchas veces: el símbolo de PlayStation con "PS4" (o "PS5"), o la palabra "PlayStation". En Switch es una tira roja con "Nintendo Switch". OJO: TODAS las carátulas de PS4/PS5 llevan IMPRESA arriba la banda del logotipo "PS4 / PlayStation 4": eso es diseño de la carátula, NO es la tira de precinto. "visible" solo si ves claramente esa tira del plástico; "not_visible" si ves bien la parte inferior de la portada y no está; "unclear" en otro caso.
-- "sealStripText": si la tira es "visible", LEE sus letras repetidas: "PS4" si se repite el símbolo de PlayStation seguido de PS4; "PS5" si se repite con PS5; "PlayStation" si se repite la palabra completa PlayStation; "sin_letras" si la tira no lleva letras (p. ej. la roja de Switch o una tira lisa); "ilegible" si ves la tira pero no puedes leer sus letras. "no_hay_tira" si "sealStrip" no es "visible". Nunca la confundas con la banda impresa de arriba de la carátula.
+- "sealStripText": si la tira es "visible", LEE sus letras repetidas: "PS4" si se repite el símbolo de PlayStation seguido de PS4; "PS5" si se repite con PS5; "PlayStation" si se repite la palabra completa PlayStation; "PS3", "PSP" o "PS Vita" si se repite ese nombre; "Blu-ray Disc" si se repite el logotipo de Blu-ray Disc; "otras_letras" si lees letras que no son ninguna de estas; "sin_letras" si la tira no lleva letras (p. ej. la roja de Switch o una tira lisa); "ilegible" si ves la tira pero no puedes leer sus letras. "no_hay_tira" si "sealStrip" no es "visible". Nunca la confundas con la banda impresa de arriba de la carátula.
 - "shrinkWrap": plástico que envuelve la caja. "factory" = película retráctil de fábrica, AJUSTADA a la caja como una segunda piel, con pliegues o arrugas, solapas dobladas en esquinas o lomo, o su costura/soldadura. "loose_sleeve" = funda o bolsa protectora SUELTA, más grande que la caja (holgada, con solapa o abertura, típica de tiendas de segunda mano). "not_visible" si la caja se ve claramente sin plástico. "unclear" en otro caso. Un brillo o reflejo de la carátula NO es plástico. MUY IMPORTANTE: TODAS las cajas de PS4/PS5/Switch/Xbox tienen de serie una LÁMINA TRANSPARENTE que cubre la carátula por fuera (es la funda de la propia caja, donde va metida la portada impresa): sus reflejos, brillos y ondulaciones sobre la portada NO son precinto, existen también en copias usadas. El precinto de fábrica envuelve la caja ENTERA y se reconoce en los BORDES y ESQUINAS (pliegues, solapas dobladas, soldadura, el plástico sobresaliendo del borde); si no ves nada de eso en los bordes, responde "not_visible" o "unclear", nunca "factory".
 - "usedLabel": true si alguna etiqueta o pegatina (de tienda, de precio o del vendedor) indica que es de SEGUNDA MANO o gradúa su estado: "Estado: Muy bueno/Bueno/Aceptable", "Usado", "Seminuevo", "Segunda mano", "Usato", "Occasion", "Pre-owned", "Pre-played". false en otro caso. Una pegatina de PRECIO de una tienda de juegos nuevos (FNAC, GAME, MediaMarkt, El Corte Inglés, Carrefour, Amazon…) NO es una etiqueta de segunda mano: solo cuenta si su texto dice expresamente usado, seminuevo o un estado de uso.
 
@@ -104,7 +104,9 @@ export function userParts(
   ];
 }
 
-const STRIP_TEXTS = ["PS4", "PS5", "PlayStation", "sin_letras", "ilegible", "no_hay_tira"] as const;
+// Letters the strip can carry (the SealStripText values) and the non-answers.
+const STRIP_LETTERS = ["PS4", "PS5", "PlayStation", "PS3", "PSP", "PS Vita", "Blu-ray Disc"] as const;
+const STRIP_TEXTS = [...STRIP_LETTERS, "otras_letras", "sin_letras", "ilegible", "no_hay_tira"] as const;
 
 export const RESPONSE_SCHEMA = {
   type: "object",
@@ -263,9 +265,10 @@ export function decide(obs: Observations): VisionResult {
   // PS5 strip.
   let stripText: SealStripText | null = null;
   if (sealed !== "no" && obs.sealStrip === "visible") {
-    if (obs.sealStripText === "PlayStation") stripText = "PlayStation";
-    else if (obs.sealStripText === "PS4" || obs.sealStripText === "PS5") {
+    if (obs.sealStripText === "PS4" || obs.sealStripText === "PS5") {
       stripText = platform === "ps4" ? "PS4" : platform === "ps5" ? "PS5" : obs.sealStripText;
+    } else if ((STRIP_LETTERS as readonly string[]).includes(obs.sealStripText)) {
+      stripText = obs.sealStripText as SealStripText;
     }
   }
   if (stripText && sealReason === "strip") {

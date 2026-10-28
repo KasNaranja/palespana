@@ -42,9 +42,18 @@ export type DetectedPlatform =
 export type SealedVerdict = "yes" | "no" | "unknown";
 
 // What the tear strip of a sealed PS4/PS5 copy says, read off the photos: the
-// console logo repeated ("PS4"/"PS5") or the word "PlayStation" repeated.
-// Collectors tell print runs apart by it. null = not seen or not legible.
-export type SealStripText = "PS4" | "PS5" | "PlayStation";
+// console logo repeated ("PS4"/"PS5") or the word "PlayStation" repeated,
+// and rarer ones on older or special runs ("PS3", "PSP", "PS Vita", the
+// "Blu-ray Disc" logo). Collectors tell print runs apart by it. null = not
+// seen or not legible.
+export type SealStripText =
+  | "PS4"
+  | "PS5"
+  | "PlayStation"
+  | "PS3"
+  | "PSP"
+  | "PS Vita"
+  | "Blu-ray Disc";
 
 // Marketplaces CazaPAL searches. Each listing carries its source so the UI can
 // show two independent progress bars and tag every card.
