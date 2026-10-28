@@ -114,7 +114,7 @@ let S = fs.existsSync(STATE_FILE) ? { ...blank(), ...JSON.parse(fs.readFileSync(
 // didn't count it).
 for (const src of Object.keys(S.bySource)) S.bySource[src].stripRead = 0;
 for (const [k, v] of Object.entries(S.seen)) {
-  if (v && v !== "-") S.bySource[k.split(":")[0]].stripRead++;
+  if (v && v !== "-" && v !== "0") S.bySource[k.split(":")[0]].stripRead++;
 }
 let saveTimer = null;
 function save() {
@@ -281,8 +281,42 @@ async function vision(urls) {
   }
 }
 
+const readStrip = (v) => v.stripText ?? (v.stripReading === "otras_letras" ? "otras letras" : null);
+
+// No letters from the first look: the strip may be in another photo. Vinted's
+// search gives only the cover, so open the listing for its gallery; then look
+// at the other photos one by one (each gets the magnifier).
+async function morePhotos(l, key) {
+  let photos = l.photoUrls;
+  if (l.source === "vinted") {
+    try {
+      const g = await vinted.fetchListingPhotos(l.vintedId);
+      if (g.length) photos = g;
+    } catch {}
+  }
+  const out = { strip: null, raw: null, photo: null };
+  const others = photos.filter((p) => p !== l.photoUrls[0]).slice(0, 4);
+  for (const p of others) {
+    let v2;
+    try {
+      v2 = await vision([p]);
+    } catch {
+      break;
+    }
+    const s2 = readStrip(v2);
+    if (s2) return { strip: s2, raw: v2.stripReading, photo: p };
+    if (v2.stripReading === "ilegible") out.raw = "ilegible";
+  }
+  log(`${key} ${others.length} fotos más → nada`);
+  return out;
+}
+
+// S.seen values: a strip; "-" not a candidate; "0" analyzed, no strip after
+// every photo; "" analyzed by an older version on the first photo only, so it
+// gets the extra photos the next time a search returns it.
 async function handle(l) {
   const key = `${l.source}:${l.vintedId}`;
+  if (S.seen[key] === "") return retryMorePhotos(l, key);
   if (key in S.seen) return;
   await waitIfPaused();
   S.counts.seen++;
@@ -316,9 +350,14 @@ async function handle(l) {
   const r = combineSeal(v, l, { condition });
   S.counts.analyzed++;
   S.bySource[l.source].analyzed++;
-  const raw = v.stripReading;
-  const strip =
-    v.stripText ?? (raw === "otras_letras" ? "otras letras" : null);
+  let raw = v.stripReading;
+  let strip = readStrip(v);
+  let stripPhoto = l.photoUrls[0];
+  if (!strip && raw !== "sin_letras" && r.sealed !== "no") {
+    const m = await morePhotos(l, key);
+    if (m.strip) ({ strip, raw, photo: stripPhoto } = m);
+    else if (m.raw) raw = m.raw;
+  }
   // Why no letters, when none: worth a manual look only if "ilegible".
   const reason = strip
     ? null
@@ -329,6 +368,22 @@ async function handle(l) {
         : r.sealed === "no"
           ? "no precintado"
           : "sin tira visible";
+  record(l, key, strip, reason, r.sealed, stripPhoto);
+}
+
+async function retryMorePhotos(l, key) {
+  await waitIfPaused();
+  const m = await morePhotos(l, key);
+  if (!m.strip) {
+    S.seen[key] = "0";
+    save();
+    return;
+  }
+  log(`${key} leída en otra foto`);
+  record(l, key, m.strip, null, "yes", m.photo);
+}
+
+function record(l, key, strip, reason, sealed, stripPhoto) {
   const bucket = strip ?? reason;
   S.counts.byStrip[bucket] = (S.counts.byStrip[bucket] ?? 0) + 1;
   if (strip) {
@@ -344,29 +399,30 @@ async function handle(l) {
     photo: l.thumbUrl ?? l.photoUrls[0] ?? null,
     strip,
     reason,
-    sealed: r.sealed,
+    sealed,
     at: new Date().toISOString(),
   };
-  S.seen[key] = strip ?? "";
+  S.seen[key] = strip ?? "0";
   remember(item);
   log(`${key} ${strip ?? reason} · ${l.title}`);
+  save();
+  if (strip && !STANDARD.has(strip)) confirmRare(item, stripPhoto, l.listingUrl);
+}
 
-  if (strip && !STANDARD.has(strip)) {
-    // Rare: read it again from the front photo alone; both must agree.
-    let again = null;
-    try {
-      const v2 = await vision([l.photoUrls[0]]);
-      again = v2.stripText ?? (v2.stripReading === "otras_letras" ? "otras letras" : null);
-    } catch {}
-    const confirmed = again === strip;
-    S.finds.unshift({
-      ...item,
-      confirmed,
-      note: confirmed ? "Dos lecturas coinciden" : `Segunda lectura: ${again ?? "no se ve la tira"}`,
-    });
-    log(`*** HALLAZGO ${strip} (${confirmed ? "confirmado" : "por confirmar"}) ${l.listingUrl}`);
-    push(true);
-  }
+async function confirmRare(item, stripPhoto, url) {
+  // Rare: read it again from that photo alone; both must agree.
+  let again = null;
+  try {
+    again = readStrip(await vision([stripPhoto]));
+  } catch {}
+  const confirmed = again === item.strip;
+  S.finds.unshift({
+    ...item,
+    confirmed,
+    note: confirmed ? "Dos lecturas coinciden" : `Segunda lectura: ${again ?? "no se ve la tira"}`,
+  });
+  log(`*** HALLAZGO ${item.strip} (${confirmed ? "confirmado" : "por confirmar"}) ${url}`);
+  push(true);
   save();
 }
 
