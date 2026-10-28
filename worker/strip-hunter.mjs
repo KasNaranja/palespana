@@ -253,17 +253,27 @@ function remember(item) {
   S.recent = S.recent.slice(0, 30);
 }
 
+// "all_keys_exhausted" means no model answered: usually Google being busy
+// (503/500, timeouts, free-tier capacity), rarely every key's daily quota. So
+// retry soon and back off only while it keeps failing.
+const BACKOFF_MIN = [0.5, 1, 2, 5, 10, 15];
 async function vision(urls) {
-  for (;;) {
+  for (let fails = 0; ; fails++) {
     try {
-      return await analyzeImages(urls);
+      const r = await analyzeImages(urls);
+      if (status === "waiting_quota") status = "running";
+      return r;
     } catch (e) {
       if (String(e.message).includes("all_keys_exhausted")) {
+        const min = BACKOFF_MIN[Math.min(fails, BACKOFF_MIN.length - 1)];
         status = "waiting_quota";
-        statusText = "La IA no responde o se acabó la cuota de hoy; reintento en 15 min.";
+        statusText =
+          fails < 3
+            ? `La IA de Google está saturada; reintento en ${min < 1 ? "30 s" : `${min} min`}.`
+            : `La IA sigue sin responder (o se acabó la cuota de hoy); reintento en ${min} min.`;
+        log(`IA sin respuesta (${fails + 1}); espero ${min} min`);
         push(true);
-        await sleep(15 * 60_000);
-        status = "running";
+        await sleep(min * 60_000);
         continue;
       }
       throw e;
