@@ -55,24 +55,43 @@ const SWEEP_PAUSE_MS = 6 * 3600_000;
 const STANDARD = new Set(["PS4", "PlayStation"]);
 const OTHER_CONSOLE = /\b(ps5|ps3|ps2|switch|xbox|psp|vita|pc|wii|3ds)\b/i;
 
-// Searches: generic "sealed PS4" ones, plus titles worth checking.
-const TITLES = [
-  "battlefield 1", "broken sword", "uncharted 4", "the last of us", "bloodborne", "god of war",
-  "horizon zero dawn", "spider-man", "days gone", "ghost of tsushima", "until dawn", "the order 1886",
-  "infamous second son", "gran turismo sport", "driveclub", "killzone shadow fall", "ratchet clank",
-  "gravity rush", "persona 5", "final fantasy xv", "final fantasy vii remake", "kingdom hearts 3",
-  "dark souls 3", "sekiro", "nioh", "red dead redemption 2", "gta v", "the witcher 3", "fallout 4",
-  "skyrim", "metal gear solid v", "death stranding", "resident evil 7", "resident evil 2",
-  "call of duty", "star wars battlefront", "battlefield 4", "battlefield v", "fifa", "pes",
-  "assassin's creed", "far cry", "watch dogs", "mass effect andromeda", "dragon age inquisition",
-  "crash bandicoot", "spyro", "yakuza", "dragon ball", "naruto", "one piece", "mortal kombat",
-  "street fighter v", "tekken 7", "doom", "wolfenstein", "dishonored", "prey", "the evil within",
-  "detroit become human", "heavy rain", "beyond two souls", "little big planet 3", "knack",
-  "ape escape", "tearaway", "the last guardian", "shadow of the colossus", "medievil",
+// Searches, most promising first. A wrong strip comes from a factory batch
+// sealed with leftover film from another line (PSP film was still around in
+// 2013–2017), so: titles with known misprints and sellers who already say so,
+// then that era's best sellers (more batches, more chances), then generic
+// searches, and last the late titles that almost surely carry the normal strip.
+const KNOWN = ["battlefield 1", "broken sword"];
+const HINTS = [
+  "tira psp", "precinto psp", "tira blu-ray", "tira bluray", "precinto blu-ray",
+  "error precinto", "misprint ps4", "ps4 tira rara",
+];
+const ERA = [
+  "fifa 15", "fifa 16", "fifa 17", "fifa 18", "pes 2015", "pes 2016", "pes 2017", "pes 2018",
+  "call of duty advanced warfare", "call of duty black ops 3", "call of duty infinite warfare",
+  "call of duty ghosts", "call of duty wwii", "battlefield 4", "battlefield hardline",
+  "star wars battlefront", "uncharted 4", "uncharted collection", "the last of us",
+  "gta v", "fallout 4", "the witcher 3", "driveclub", "killzone shadow fall", "knack",
+  "infamous second son", "bloodborne", "the order 1886", "until dawn", "ratchet clank",
+  "little big planet 3", "metal gear solid v", "assassin's creed unity", "assassin's creed syndicate",
+  "far cry 4", "far cry primal", "watch dogs", "destiny", "titanfall 2", "need for speed",
+  "mad max", "batman arkham knight", "middle earth shadow of mordor", "dragon age inquisition",
+  "the evil within", "dying light", "mortal kombat x", "street fighter v", "tekken 7",
+  "dark souls 3", "doom", "wolfenstein the new order", "dishonored 2", "rise of the tomb raider",
+  "lego", "just dance", "minecraft", "rocket league", "overwatch", "horizon zero dawn",
+  "gran turismo sport", "crash bandicoot", "final fantasy xv", "resident evil 7",
+];
+const LATE = [
+  "god of war", "spider-man", "red dead redemption 2", "days gone", "ghost of tsushima",
+  "detroit become human", "sekiro", "death stranding", "final fantasy vii remake",
+  "kingdom hearts 3", "resident evil 2", "battlefield v", "persona 5", "yakuza", "nioh",
 ];
 const QUERIES = cfg.queries ?? [
+  ...KNOWN.map((t) => `${t} ps4 precintado`),
+  ...KNOWN.map((t) => `${t} ps4 nuevo`),
+  ...HINTS,
+  ...ERA.map((t) => `${t} ps4 precintado`),
   "ps4 precintado", "ps4 nuevo precintado", "juego ps4 precintado", "ps4 sin abrir", "ps4 sealed",
-  ...TITLES.map((t) => `${t} ps4 precintado`),
+  ...LATE.map((t) => `${t} ps4 precintado`),
 ];
 
 // ── State (persists across restarts) ──
@@ -355,8 +374,10 @@ async function searchSource(source, q) {
 }
 
 async function sweep() {
-  if (!S.sweep.startedAt || S.sweep.index >= QUERIES.length) {
-    S.sweep = { index: 0, startedAt: new Date().toISOString(), nextAt: null };
+  // A changed search list restarts the sweep (already-seen listings are skipped).
+  const sig = createHash("sha256").update(QUERIES.join("\n")).digest("hex").slice(0, 12);
+  if (!S.sweep.startedAt || S.sweep.index >= QUERIES.length || S.sweep.sig !== sig) {
+    S.sweep = { index: 0, startedAt: new Date().toISOString(), nextAt: null, sig };
   }
   status = "running";
   for (; S.sweep.index < QUERIES.length; S.sweep.index++) {
