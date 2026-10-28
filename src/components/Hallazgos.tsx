@@ -27,7 +27,7 @@ const STATUS_STYLE: Record<HuntSnapshot["status"], string> = {
 const STATUS_LABEL: Record<HuntSnapshot["status"], string> = {
   running: "Rastreando",
   paused: "En pausa",
-  waiting_quota: "Esperando cuota de la IA",
+  waiting_quota: "Esperando a la IA",
   sleeping: "En pausa hasta la próxima vuelta",
   error: "Con problemas",
 };

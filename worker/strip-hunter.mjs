@@ -46,7 +46,7 @@ const lib = (m) => require(path.join(DIR, "lib", m));
 const wallapop = lib("wallapop.js");
 const ebay = lib("ebay.js");
 const vinted = lib("vinted.js");
-const { analyzeImages } = lib("vision.js");
+const { analyzeImages, getVisionStats } = lib("vision.js");
 const { combineSeal, textSealClaim, conditionSealSignal, isLot } = lib("sealSignals.js");
 const { titleNamesConsole } = lib("filter.js");
 
@@ -258,7 +258,7 @@ function remember(item) {
 // "all_keys_exhausted" means no model answered: usually Google being busy
 // (503/500, timeouts, free-tier capacity), rarely every key's daily quota. So
 // retry soon and back off only while it keeps failing.
-const BACKOFF_MIN = [0.5, 1, 2, 5, 10, 15];
+const BACKOFF_MIN = [0.5, 0.5, 1, 1, 2, 2, 3, 3, 5, 10, 15];
 async function vision(urls) {
   for (let fails = 0; ; fails++) {
     try {
@@ -269,11 +269,15 @@ async function vision(urls) {
       if (String(e.message).includes("all_keys_exhausted")) {
         const min = BACKOFF_MIN[Math.min(fails, BACKOFF_MIN.length - 1)];
         status = "waiting_quota";
+        const when = min < 1 ? "30 s" : `${min} min`;
         statusText =
-          fails < 3
-            ? `La IA de Google está saturada; reintento en ${min < 1 ? "30 s" : `${min} min`}.`
-            : `La IA sigue sin responder (o se acabó la cuota de hoy); reintento en ${min} min.`;
-        log(`IA sin respuesta (${fails + 1}); espero ${min} min`);
+          fails < 8
+            ? `Los servidores gratuitos de Google están saturados ahora mismo (no es tu cuota); reintento en ${when}.`
+            : `La IA lleva rato sin responder (saturación de Google o cuota de hoy agotada); reintento en ${when}.`;
+        const st = getVisionStats();
+        log(
+          `IA sin respuesta (${fails + 1}); espero ${min} min · timeouts ${st.timeouts} 503 ${st.r503} 429cap ${st.r429cap} 429día ${st.r429day} 429min ${st.r429min} · ${st.last429Metrics} · ${urls.length} fotos ${urls[0]}`
+        );
         push(true);
         await sleep(min * 60_000);
         continue;
