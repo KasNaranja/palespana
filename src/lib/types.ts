@@ -233,7 +233,8 @@ export interface HuntItem {
   price: number;
   url: string;
   photo: string | null;
-  strip: string | null; // letters read on the strip ("PS4", "PSP"…), null = not seen
+  strip: string | null; // letters read on the strip ("PS4", "PSP"…), null = not read
+  reason?: string | null; // why not read: "tira ilegible", "sin tira visible"…
   sealed: SealedVerdict;
   at: string; // ISO time it was analyzed
 }
@@ -257,7 +258,8 @@ export interface HuntSnapshot {
     byStrip: Record<string, number>; // "PS4" → n, "PlayStation" → n, "none" → n…
     errors: number;
   };
-  bySource: Record<MarketSource, { seen: number; analyzed: number }>;
+  bySource: Record<MarketSource, { seen: number; analyzed: number; stripRead?: number }>;
+  sources?: MarketSource[]; // marketplaces the hunter searches
   recent: HuntItem[]; // newest first, ~30
   finds: HuntFind[]; // every non-standard strip, newest first
   updatedAt: string;

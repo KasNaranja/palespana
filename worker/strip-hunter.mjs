@@ -33,6 +33,10 @@ const TOKEN = String(cfg.token);
 
 // The website's lib reads its settings from the environment.
 process.env.GEMINI_API_KEYS = cfg.geminiKeys;
+// eBay only when its app keys are in hunter.json (same as on Render).
+process.env.EBAY_CLIENT_ID = cfg.ebayClientId ?? "";
+process.env.EBAY_CLIENT_SECRET = cfg.ebayClientSecret ?? "";
+const SOURCES = ["wallapop", "vinted", ...(cfg.ebayClientId && cfg.ebayClientSecret ? ["ebay"] : [])];
 process.env.ENABLE_CACHE = "false";
 process.env.GEMINI_MIN_INTERVAL_MS ??= "4500";
 delete process.env.VINTED_WORKER_TOKEN; // fetch Vinted directly: we ARE home
@@ -40,6 +44,7 @@ delete process.env.VINTED_WORKER_TOKEN; // fetch Vinted directly: we ARE home
 const require = createRequire(import.meta.url);
 const lib = (m) => require(path.join(DIR, "lib", m));
 const wallapop = lib("wallapop.js");
+const ebay = lib("ebay.js");
 const vinted = lib("vinted.js");
 const { analyzeImages } = lib("vision.js");
 const { combineSeal, textSealClaim, conditionSealSignal, isLot } = lib("sealSignals.js");
@@ -77,11 +82,21 @@ const blank = () => ({
   finds: [],
   recent: [],
   counts: { seen: 0, candidates: 0, analyzed: 0, stripRead: 0, byStrip: {}, errors: 0 },
-  bySource: { vinted: { seen: 0, analyzed: 0 }, wallapop: { seen: 0, analyzed: 0 }, ebay: { seen: 0, analyzed: 0 } },
+  bySource: {
+    vinted: { seen: 0, analyzed: 0, stripRead: 0 },
+    wallapop: { seen: 0, analyzed: 0, stripRead: 0 },
+    ebay: { seen: 0, analyzed: 0, stripRead: 0 },
+  },
   sweep: { index: 0, startedAt: null, nextAt: null },
   paused: false,
 });
 let S = fs.existsSync(STATE_FILE) ? { ...blank(), ...JSON.parse(fs.readFileSync(STATE_FILE, "utf8")) } : blank();
+// Per-source "strips read", rebuilt from the seen map (older state files
+// didn't count it).
+for (const src of Object.keys(S.bySource)) S.bySource[src].stripRead = 0;
+for (const [k, v] of Object.entries(S.seen)) {
+  if (v && v !== "-") S.bySource[k.split(":")[0]].stripRead++;
+}
 let saveTimer = null;
 function save() {
   clearTimeout(saveTimer);
@@ -116,6 +131,7 @@ function snapshot() {
     query: { index: S.sweep.index, total: QUERIES.length, text: current.text, source: current.source },
     counts: S.counts,
     bySource: S.bySource,
+    sources: SOURCES,
     recent: S.recent.slice(0, 30),
     finds: S.finds,
     updatedAt: new Date().toISOString(),
@@ -253,7 +269,8 @@ async function handle(l) {
   let condition = l.sellerConditionRaw ?? null;
   if (l.source === "wallapop") condition = (await wallapop.fetchItemCondition(l.vintedId)) ?? null;
   const cond = conditionSealSignal(l.source, condition);
-  if (cond === "used" || (claim !== "sealed" && cond !== "sealed")) {
+  const ebayNew = l.source === "ebay" && l.sellerCondition === "new";
+  if (cond === "used" || (claim !== "sealed" && cond !== "sealed" && !ebayNew)) {
     S.seen[key] = "-";
     return;
   }
@@ -273,8 +290,22 @@ async function handle(l) {
   const raw = v.stripReading;
   const strip =
     v.stripText ?? (raw === "otras_letras" ? "otras letras" : null);
-  S.counts.byStrip[strip ?? "none"] = (S.counts.byStrip[strip ?? "none"] ?? 0) + 1;
-  if (strip) S.counts.stripRead++;
+  // Why no letters, when none: worth a manual look only if "ilegible".
+  const reason = strip
+    ? null
+    : raw === "ilegible"
+      ? "tira ilegible"
+      : raw === "sin_letras"
+        ? "tira sin letras"
+        : r.sealed === "no"
+          ? "no precintado"
+          : "sin tira visible";
+  const bucket = strip ?? reason;
+  S.counts.byStrip[bucket] = (S.counts.byStrip[bucket] ?? 0) + 1;
+  if (strip) {
+    S.counts.stripRead++;
+    S.bySource[l.source].stripRead = (S.bySource[l.source].stripRead ?? 0) + 1;
+  }
   const item = {
     key,
     source: l.source,
@@ -283,12 +314,13 @@ async function handle(l) {
     url: l.listingUrl,
     photo: l.thumbUrl ?? l.photoUrls[0] ?? null,
     strip,
+    reason,
     sealed: r.sealed,
     at: new Date().toISOString(),
   };
   S.seen[key] = strip ?? "";
   remember(item);
-  log(`${key} ${strip ?? "sin tira"} · ${l.title}`);
+  log(`${key} ${strip ?? reason} · ${l.title}`);
 
   if (strip && !STANDARD.has(strip)) {
     // Rare: read it again from the front photo alone; both must agree.
@@ -312,6 +344,7 @@ async function handle(l) {
 // ── Sweeps ──
 async function searchSource(source, q) {
   if (source === "wallapop") return wallapop.searchListings(q, "ps4", 200);
+  if (source === "ebay") return ebay.searchListings(q, "ps4", 100);
   const out = [];
   for (let page = 1; page <= 3; page++) {
     const got = await vinted.searchListings(q, "ps4", 96, page);
@@ -329,9 +362,9 @@ async function sweep() {
   for (; S.sweep.index < QUERIES.length; S.sweep.index++) {
     await waitIfPaused();
     const q = QUERIES[S.sweep.index];
-    for (const source of ["wallapop", "vinted"]) {
+    for (const source of SOURCES) {
       current = { text: q, source };
-      statusText = `Buscando «${q}» en ${source === "vinted" ? "Vinted" : "Wallapop"}`;
+      statusText = `Buscando «${q}» en ${{ vinted: "Vinted", wallapop: "Wallapop", ebay: "eBay" }[source]}`;
       let listings = [];
       try {
         listings = await searchSource(source, q);

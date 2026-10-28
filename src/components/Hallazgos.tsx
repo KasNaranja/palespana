@@ -8,7 +8,7 @@ import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { formatPrice } from "@/lib/format";
 import { signalPc } from "@/lib/pcSignal";
-import { MARKET_LABELS, type HuntFind, type HuntItem, type HuntSnapshot } from "@/lib/types";
+import { MARKET_LABELS, MARKET_SOURCES, type HuntFind, type HuntItem, type HuntSnapshot } from "@/lib/types";
 
 interface HuntResponse {
   enabled: boolean;
@@ -42,20 +42,27 @@ function ago(iso: string | null): string {
   return `hace ${Math.round(s / 3600)} h`;
 }
 
-function StripTag({ strip }: { strip: string | null }) {
+// Letters a strip can carry; any other key in counts.byStrip is a reason it
+// wasn't read ("tira ilegible", "sin tira visible"…; "none" = counted before
+// the reasons existed).
+const LETTERS = new Set(["PS4", "PS5", "PlayStation", "PS3", "PSP", "PS Vita", "Blu-ray Disc", "otras letras"]);
+
+function StripTag({ strip, reason }: { strip: string | null; reason?: string | null }) {
   const rare = !!strip && !STANDARD.has(strip);
   return (
     <span
       className={[
         "shrink-0 rounded px-1.5 py-0.5 text-[11px] font-bold",
-        !strip
-          ? "bg-panel2 text-texto-3"
-          : rare
+        strip
+          ? rare
             ? "bg-brand-600 text-white"
-            : "bg-gold-500 text-carbon",
+            : "bg-gold-500 text-carbon"
+          : reason === "tira ilegible"
+            ? "bg-verdict-inconcBg text-verdict-inconc" // worth a look by hand
+            : "bg-panel2 text-texto-3",
       ].join(" ")}
     >
-      {strip ?? "sin leer"}
+      {strip ?? reason ?? "sin leer"}
     </span>
   );
 }
@@ -125,7 +132,7 @@ function RecentRow({ it }: { it: HuntItem }) {
           {MARKET_LABELS[it.source]} · {formatPrice(it.price, "EUR")} · {ago(it.at)}
         </div>
       </div>
-      <StripTag strip={it.strip} />
+      <StripTag strip={it.strip} reason={it.reason} />
     </a>
   );
 }
@@ -254,13 +261,53 @@ export function Hallazgos() {
             <Stat label="Tiras raras" value={s.finds.length} />
           </div>
 
+          {/* Per marketplace */}
+          <div className="overflow-hidden rounded-card border border-borde bg-panel">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-xs text-texto-3">
+                  <th className="px-3 py-2 font-medium">Plataforma</th>
+                  <th className="px-3 py-2 text-right font-medium">Vistos</th>
+                  <th className="px-3 py-2 text-right font-medium">Precintados analizados</th>
+                  <th className="px-3 py-2 text-right font-medium">Tiras leídas</th>
+                </tr>
+              </thead>
+              <tbody>
+                {MARKET_SOURCES.map((src) => {
+                  const b = s.bySource[src] ?? { seen: 0, analyzed: 0, stripRead: 0 };
+                  const off = s.sources && !s.sources.includes(src);
+                  return (
+                    <tr key={src} className="border-t border-borde">
+                      <td className="px-3 py-2 text-texto-1">{MARKET_LABELS[src]}</td>
+                      {off ? (
+                        <td colSpan={3} className="px-3 py-2 text-right text-xs text-texto-3">
+                          no se rastrea (faltan sus claves en el PC)
+                        </td>
+                      ) : (
+                        <>
+                          <td className="px-3 py-2 text-right tabular-nums text-texto-2">{b.seen}</td>
+                          <td className="px-3 py-2 text-right tabular-nums text-texto-2">{b.analyzed}</td>
+                          <td className="px-3 py-2 text-right tabular-nums text-texto-1">{b.stripRead ?? 0}</td>
+                        </>
+                      )}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
           {/* Strip distribution */}
           <div className="flex flex-wrap gap-2">
             {Object.entries(s.counts.byStrip)
               .sort((a, b) => b[1] - a[1])
               .map(([k, n]) => (
                 <span key={k} className="flex items-center gap-1.5 rounded-full border border-borde bg-panel px-2.5 py-1 text-xs text-texto-2">
-                  <StripTag strip={k === "none" ? null : k} />
+                  {LETTERS.has(k) ? (
+                    <StripTag strip={k} />
+                  ) : (
+                    <StripTag strip={null} reason={k === "none" ? "sin leer (antes del desglose)" : k} />
+                  )}
                   <span className="tabular-nums">{n}</span>
                 </span>
               ))}
@@ -292,11 +339,9 @@ export function Hallazgos() {
             </div>
           </div>
 
-          <p className="text-xs text-texto-3">
-            Vinted: {s.bySource.vinted.analyzed} analizados de {s.bySource.vinted.seen} vistos ·
-            Wallapop: {s.bySource.wallapop.analyzed} de {s.bySource.wallapop.seen}
-            {s.counts.errors ? ` · ${s.counts.errors} errores` : ""}
-          </p>
+          {s.counts.errors > 0 && (
+            <p className="text-xs text-texto-3">{s.counts.errors} errores (se reintentan en la siguiente vuelta)</p>
+          )}
         </div>
       )}
     </section>
