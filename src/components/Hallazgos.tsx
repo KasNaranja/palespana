@@ -4,8 +4,10 @@
 // owner's PC (worker/strip-hunter.mjs → /api/hallazgos). Rare strips (PSP,
 // Blu-ray Disc… on a PS4 game) are factory errors worth a lot to collectors.
 
+import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { formatPrice } from "@/lib/format";
+import { signalPc } from "@/lib/pcSignal";
 import { MARKET_LABELS, type HuntFind, type HuntItem, type HuntSnapshot } from "@/lib/types";
 
 interface HuntResponse {
@@ -16,6 +18,7 @@ interface HuntResponse {
 
 const STATUS_STYLE: Record<HuntSnapshot["status"], string> = {
   running: "bg-verdict-esBg text-verdict-es border-verdict-esBorder",
+  paused: "bg-panel2 text-texto-1 border-borde-fuerte",
   waiting_quota: "bg-verdict-inconcBg text-verdict-inconc border-verdict-inconcBorder",
   sleeping: "bg-panel2 text-texto-2 border-borde-fuerte",
   error: "bg-verdict-otherBg text-verdict-other border-verdict-otherBorder",
@@ -23,6 +26,7 @@ const STATUS_STYLE: Record<HuntSnapshot["status"], string> = {
 
 const STATUS_LABEL: Record<HuntSnapshot["status"], string> = {
   running: "Rastreando",
+  paused: "En pausa",
   waiting_quota: "Esperando cuota de la IA",
   sleeping: "En pausa hasta la próxima vuelta",
   error: "Con problemas",
@@ -138,9 +142,35 @@ export function Hallazgos() {
   });
 
   const s = q.data?.snapshot ?? null;
-  // The PC pushes every few seconds while this page is open: a snapshot this
-  // old means the PC is off or the hunter isn't running.
-  const offline = q.data && (q.data.ageSec === null || q.data.ageSec > 90);
+  const age = q.data?.ageSec ?? null;
+
+  // Ask the PC for fresh data while this page is open and the snapshot is
+  // getting old (it then pushes every few seconds while we watch).
+  const lastAsk = useRef(0);
+  useEffect(() => {
+    if (!q.data?.enabled) return;
+    if ((age === null || age > 10) && Date.now() - lastAsk.current > 20_000) {
+      lastAsk.current = Date.now();
+      void signalPc("hunt", "report");
+    }
+  }, [q.data, age]);
+
+  // The PC answers within seconds: a snapshot this old, after asking, means
+  // the PC is off or the hunter isn't running.
+  const offline = q.data && (age === null || age > 90);
+
+  // Play / pause: the command travels to the PC; the status updates once
+  // the PC pushes its next snapshot, so show the request meanwhile.
+  const [sent, setSent] = useState<"play" | "pause" | null>(null);
+  useEffect(() => {
+    if (!sent || !s) return;
+    if ((sent === "pause") === (s.status === "paused")) setSent(null);
+  }, [s, sent]);
+  function command(c: "play" | "pause") {
+    setSent(c);
+    lastAsk.current = Date.now();
+    void signalPc("hunt", c);
+  }
 
   return (
     <section className="pt-6">
@@ -172,6 +202,26 @@ export function Hallazgos() {
             </span>
             <span className="text-sm text-texto-2">{s.statusText}</span>
             <span className="text-xs text-texto-3">actualizado {ago(s.updatedAt)}</span>
+            <div className="ml-auto flex gap-2">
+              <button
+                type="button"
+                onClick={() => command("play")}
+                disabled={!offline && s.status === "running"}
+                className="inline-flex min-h-[40px] items-center gap-2 rounded-xl bg-verdict-es px-4 font-semibold text-carbon transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden fill="currentColor"><path d="M7 4v16l13-8z" /></svg>
+                {sent === "play" ? "Enviando…" : "Play"}
+              </button>
+              <button
+                type="button"
+                onClick={() => command("pause")}
+                disabled={!offline && s.status === "paused"}
+                className="inline-flex min-h-[40px] items-center gap-2 rounded-xl border border-borde-fuerte bg-panel px-4 font-semibold text-texto-1 transition hover:border-brand-500 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden fill="currentColor"><path d="M6 4h4v16H6zM14 4h4v16h-4z" /></svg>
+                {sent === "pause" ? "Enviando…" : "Pausa"}
+              </button>
+            </div>
           </div>
 
           {/* Progress through the sweep's searches */}

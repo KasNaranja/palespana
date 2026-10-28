@@ -244,7 +244,7 @@ export interface HuntFind extends HuntItem {
 }
 
 export interface HuntSnapshot {
-  status: "running" | "waiting_quota" | "sleeping" | "error";
+  status: "running" | "paused" | "waiting_quota" | "sleeping" | "error";
   statusText: string; // one sentence in Spanish
   startedAt: string | null; // current sweep
   nextSweepAt: string | null; // when sleeping

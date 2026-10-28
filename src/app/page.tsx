@@ -14,6 +14,7 @@ import { Mirilla } from "@/components/Mirilla";
 import { Favorites } from "@/components/Favorites";
 import { Hallazgos } from "@/components/Hallazgos";
 import { getStatus, postSearch, CazaApiError } from "@/lib/api";
+import { signalPc } from "@/lib/pcSignal";
 import { useRecentSearches } from "@/lib/useRecentSearches";
 import { useFavorites } from "@/lib/useFavorites";
 import { consoleKeep } from "@/lib/filter";
@@ -60,7 +61,12 @@ export default function Home() {
 
   const search = useMutation<SearchResponse, CazaApiError, { q: string; c: ConsoleKey }>(
     {
-      mutationFn: ({ q, c }) => postSearch(q, c, activeId.current ?? undefined),
+      // Wake the PC that fetches Vinted (it sleeps between searches) while
+      // the server starts the search; the server waits for it to come online.
+      mutationFn: ({ q, c }) => {
+        void signalPc("wake", "wake");
+        return postSearch(q, c, activeId.current ?? undefined);
+      },
       onSuccess: (data) => {
         activeId.current = data.search.id;
         setActive({

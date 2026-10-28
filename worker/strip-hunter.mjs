@@ -79,6 +79,7 @@ const blank = () => ({
   counts: { seen: 0, candidates: 0, analyzed: 0, stripRead: 0, byStrip: {}, errors: 0 },
   bySource: { vinted: { seen: 0, analyzed: 0 }, wallapop: { seen: 0, analyzed: 0 }, ebay: { seen: 0, analyzed: 0 } },
   sweep: { index: 0, startedAt: null, nextAt: null },
+  paused: false,
 });
 let S = fs.existsSync(STATE_FILE) ? { ...blank(), ...JSON.parse(fs.readFileSync(STATE_FILE, "utf8")) } : blank();
 let saveTimer = null;
@@ -138,7 +139,50 @@ async function push(force = false) {
 }
 setInterval(() => push(), 5000);
 
-// The server asks for a fresh snapshot through ntfy when the dashboard opens.
+// Commands from the dashboard (the visitor's browser posts them to ntfy):
+// "report" = send a fresh snapshot, "play" / "pause" = resume / stop the hunt.
+let interrupt = () => {};
+function nap(ms) {
+  return new Promise((r) => {
+    const t = setTimeout(r, ms);
+    interrupt = () => {
+      clearTimeout(t);
+      r();
+    };
+  });
+}
+
+function onCommand(cmd) {
+  watching = true;
+  if (cmd === "pause" && !S.paused) {
+    S.paused = true;
+    status = "paused";
+    statusText = "En pausa: pulsa Play para seguir.";
+    log("pausa pedida desde la web");
+    save();
+  } else if (cmd === "play" && (S.paused || status === "sleeping")) {
+    S.paused = false;
+    S.sweep.nextAt = null; // Play during the rest between sweeps: start now
+    status = "running";
+    statusText = "Reanudando…";
+    log("play pedido desde la web");
+    save();
+    interrupt();
+  }
+  push(true);
+}
+
+/** Holds the hunt while paused (between listings, never mid-analysis). */
+async function waitIfPaused() {
+  while (S.paused) {
+    status = "paused";
+    statusText = "En pausa: pulsa Play para seguir.";
+    await nap(3600_000);
+  }
+  if (status === "paused") status = "running";
+}
+
+// The dashboard asks for a fresh snapshot through ntfy when it opens.
 const TOPIC = "cazapal-" + createHash("sha256").update("hunt:" + TOKEN).digest("hex").slice(0, 32);
 async function listen() {
   for (;;) {
@@ -157,10 +201,8 @@ async function listen() {
           const line = buf.slice(0, i);
           buf = buf.slice(i + 1);
           try {
-            if (JSON.parse(line).event === "message") {
-              watching = true;
-              push(true);
-            }
+            const ev = JSON.parse(line);
+            if (ev.event === "message") onCommand(String(ev.message || "").trim());
           } catch {}
         }
       }
@@ -197,6 +239,7 @@ async function vision(urls) {
 async function handle(l) {
   const key = `${l.source}:${l.vintedId}`;
   if (key in S.seen) return;
+  await waitIfPaused();
   S.counts.seen++;
   S.bySource[l.source].seen++;
   const text = `${l.sellerText ?? l.title}`;
@@ -284,6 +327,7 @@ async function sweep() {
   }
   status = "running";
   for (; S.sweep.index < QUERIES.length; S.sweep.index++) {
+    await waitIfPaused();
     const q = QUERIES[S.sweep.index];
     for (const source of ["wallapop", "vinted"]) {
       current = { text: q, source };
@@ -309,11 +353,13 @@ log(`arrancado; ${QUERIES.length} búsquedas, ${Object.keys(S.seen).length} anun
 listen();
 for (;;) {
   try {
+    await waitIfPaused();
     if (S.sweep.nextAt && Date.parse(S.sweep.nextAt) > Date.now()) {
       status = "sleeping";
       statusText = `Vuelta completada; la siguiente mira solo anuncios nuevos.`;
       push(true);
-      await sleep(Date.parse(S.sweep.nextAt) - Date.now());
+      await nap(Date.parse(S.sweep.nextAt) - Date.now());
+      await waitIfPaused();
     }
     S.sweep.nextAt = null;
     await sweep();
