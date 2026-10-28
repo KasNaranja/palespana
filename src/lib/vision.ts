@@ -259,12 +259,14 @@ export async function analyzeImages(imageUrls: string[]): Promise<VisionResult> 
   // parks that key (~30 min) so we lean on the others; a per-minute 429 moves
   // to the next key. A 503 benches the MODEL and jumps to the next one right
   // away — retrying other keys against an overloaded model only burns time.
+  const CAP_TRIES_PER_MODEL = 4;
   let res: Response | null = null;
   const gemStart = Date.now();
   for (const model of modelsToTry()) {
     const url = urlFor(model);
     const tried = new Set<string>();
     const maxTries = keyStates.length + 1;
+    let capTries = 0;
     for (let attempt = 0; attempt < maxTries; attempt++) {
       let ks = pickKey(tried, model);
       if (!ks) {
@@ -318,15 +320,17 @@ export async function analyzeImages(imageUrls: string[]): Promise<VisionResult> 
           : `(sin cuota) ${message}`;
         if (quotaIds.length === 0) {
           // No quota named: not OUR per-minute or daily quota but free-tier
-          // capacity running out ("Resource has been exhausted", measured at
-          // ~23% of calls on a busy day). Rotating keys on the same model hits
-          // the same wall, so this request moves to the next model; the key
-          // only rests briefly on this model.
+          // capacity running out ("Resource has been exhausted"). It is per
+          // call, not per model: measured on a busy evening, the same photo
+          // that got it on one key went through on 9 other keys right away.
+          // So try a few keys before moving to the next model; the key only
+          // rests briefly on this model.
           stats.r429cap++;
           kc.r429cap++;
           modelStats[model].r429cap++;
           ks.parkedUntil[model] = Date.now() + 10 * 1000;
-          break;
+          if (++capTries >= CAP_TRIES_PER_MODEL) break;
+          continue;
         }
         // Gemini responde RESOURCE_EXHAUSTED tanto para el límite POR MINUTO como
         // para el DIARIO, así que NO se puede usar ese código para decidir. Solo
