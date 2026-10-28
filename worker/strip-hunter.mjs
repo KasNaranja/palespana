@@ -53,7 +53,7 @@ const { titleNamesConsole } = lib("filter.js");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const SWEEP_PAUSE_MS = 6 * 3600_000;
 const STANDARD = new Set(["PS4", "PlayStation"]);
-const OTHER_CONSOLE = /\b(ps5|ps3|ps2|ps1|switch|xbox|psp|vita|pc|wii|3ds|nds|gba|game ?boy|game ?cube|nintendo|sega|baraja|cartas|libro|figura|funko|camiseta|poster|guía)\b/i;
+const OTHER_CONSOLE = /\b(ps5|ps3|ps2|ps1|switch|xbox|psp|vita|pc|wii|3ds|nds|gba|game ?boy|game ?cube|nintendo|sega|evercade|baraja|cartas|libro|figura|funko|camiseta|poster|guía)\b/i;
 
 // Searches, most promising first. A wrong strip comes from a factory batch
 // sealed with leftover film from another line (PSP film was still around in
