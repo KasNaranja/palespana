@@ -1,0 +1,327 @@
+// ─────────────────────────────────────────────────────────────
+// Strip hunter — runs on the owner's PC next to vinted-worker.mjs.
+//
+// Walks sealed PS4 listings on Vinted and Wallapop and reads the factory
+// seal's tear strip with the same vision pipeline as the website (photos +
+// magnifier, src/lib/vision.ts). Rare strips on a PS4 game (PSP, Blu-ray
+// Disc, PS3, PS5, PS Vita, other letters) are factory errors collectors pay
+// a lot for: each one is re-read on its own to confirm, and listed in the
+// website's "Hallazgos" tab.
+//
+// Runs from the PC because Vinted serves a home IP (not Render's) and so its
+// progress survives Render's restarts: the state lives in hunter-state.json.
+// The website shows a snapshot this program pushes to /api/hallazgos/report:
+// every few seconds while the dashboard is open, otherwise only when the
+// server asks through ntfy (so Render's free instance can sleep).
+//
+// Needs ./lib (src/lib compiled to CommonJS: see the README note below) and
+// hunter.json: {"server", "token", "geminiKeys": "k1,k2", "queries"?: [...]}.
+//   npx tsc src/lib/*.ts --outDir <dir>/lib --module commonjs --target es2020
+//     --esModuleInterop --skipLibCheck --moduleResolution node
+// ─────────────────────────────────────────────────────────────
+
+import { createHash } from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
+import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
+
+const DIR = path.dirname(fileURLToPath(import.meta.url));
+const cfg = JSON.parse(fs.readFileSync(path.join(DIR, "hunter.json"), "utf8"));
+const SERVER = String(cfg.server).replace(/\/+$/, "");
+const TOKEN = String(cfg.token);
+
+// The website's lib reads its settings from the environment.
+process.env.GEMINI_API_KEYS = cfg.geminiKeys;
+process.env.ENABLE_CACHE = "false";
+process.env.GEMINI_MIN_INTERVAL_MS ??= "4500";
+delete process.env.VINTED_WORKER_TOKEN; // fetch Vinted directly: we ARE home
+
+const require = createRequire(import.meta.url);
+const lib = (m) => require(path.join(DIR, "lib", m));
+const wallapop = lib("wallapop.js");
+const vinted = lib("vinted.js");
+const { analyzeImages } = lib("vision.js");
+const { combineSeal, textSealClaim, conditionSealSignal, isLot } = lib("sealSignals.js");
+const { titleNamesConsole } = lib("filter.js");
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const SWEEP_PAUSE_MS = 6 * 3600_000;
+const STANDARD = new Set(["PS4", "PlayStation"]);
+const OTHER_CONSOLE = /\b(ps5|ps3|ps2|switch|xbox|psp|vita|pc|wii|3ds)\b/i;
+
+// Searches: generic "sealed PS4" ones, plus titles worth checking.
+const TITLES = [
+  "battlefield 1", "broken sword", "uncharted 4", "the last of us", "bloodborne", "god of war",
+  "horizon zero dawn", "spider-man", "days gone", "ghost of tsushima", "until dawn", "the order 1886",
+  "infamous second son", "gran turismo sport", "driveclub", "killzone shadow fall", "ratchet clank",
+  "gravity rush", "persona 5", "final fantasy xv", "final fantasy vii remake", "kingdom hearts 3",
+  "dark souls 3", "sekiro", "nioh", "red dead redemption 2", "gta v", "the witcher 3", "fallout 4",
+  "skyrim", "metal gear solid v", "death stranding", "resident evil 7", "resident evil 2",
+  "call of duty", "star wars battlefront", "battlefield 4", "battlefield v", "fifa", "pes",
+  "assassin's creed", "far cry", "watch dogs", "mass effect andromeda", "dragon age inquisition",
+  "crash bandicoot", "spyro", "yakuza", "dragon ball", "naruto", "one piece", "mortal kombat",
+  "street fighter v", "tekken 7", "doom", "wolfenstein", "dishonored", "prey", "the evil within",
+  "detroit become human", "heavy rain", "beyond two souls", "little big planet 3", "knack",
+  "ape escape", "tearaway", "the last guardian", "shadow of the colossus", "medievil",
+];
+const QUERIES = cfg.queries ?? [
+  "ps4 precintado", "ps4 nuevo precintado", "juego ps4 precintado", "ps4 sin abrir", "ps4 sealed",
+  ...TITLES.map((t) => `${t} ps4 precintado`),
+];
+
+// ── State (persists across restarts) ──
+const STATE_FILE = path.join(DIR, "hunter-state.json");
+const blank = () => ({
+  seen: {}, // key → strip read ("" = analyzed, no strip; "-" = skipped, not a candidate)
+  finds: [],
+  recent: [],
+  counts: { seen: 0, candidates: 0, analyzed: 0, stripRead: 0, byStrip: {}, errors: 0 },
+  bySource: { vinted: { seen: 0, analyzed: 0 }, wallapop: { seen: 0, analyzed: 0 }, ebay: { seen: 0, analyzed: 0 } },
+  sweep: { index: 0, startedAt: null, nextAt: null },
+});
+let S = fs.existsSync(STATE_FILE) ? { ...blank(), ...JSON.parse(fs.readFileSync(STATE_FILE, "utf8")) } : blank();
+let saveTimer = null;
+function save() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    fs.writeFileSync(STATE_FILE + ".tmp", JSON.stringify(S));
+    fs.renameSync(STATE_FILE + ".tmp", STATE_FILE);
+  }, 500);
+}
+
+const LOG = path.join(DIR, "hunter.log");
+function log(msg) {
+  const line = `${new Date().toISOString()} ${msg}\n`;
+  try {
+    if (fs.existsSync(LOG) && fs.statSync(LOG).size > 2_000_000) fs.renameSync(LOG, LOG + ".old");
+    fs.appendFileSync(LOG, line);
+  } catch {}
+}
+
+// ── Snapshot for the dashboard ──
+let status = "running";
+let statusText = "Arrancando…";
+let current = { text: "", source: null };
+let watching = true; // until the server says otherwise
+let lastPush = 0;
+
+function snapshot() {
+  return {
+    status,
+    statusText,
+    startedAt: S.sweep.startedAt,
+    nextSweepAt: S.sweep.nextAt,
+    query: { index: S.sweep.index, total: QUERIES.length, text: current.text, source: current.source },
+    counts: S.counts,
+    bySource: S.bySource,
+    recent: S.recent.slice(0, 30),
+    finds: S.finds,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+async function push(force = false) {
+  if (!force && !watching) return;
+  if (!force && Date.now() - lastPush < 4000) return;
+  lastPush = Date.now();
+  try {
+    const r = await fetch(`${SERVER}/api/hallazgos/report`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-worker-token": TOKEN },
+      body: JSON.stringify(snapshot()),
+      signal: AbortSignal.timeout(60_000),
+    });
+    if (r.ok) watching = (await r.json()).watching === true;
+    else if (r.status === 401) log("el servidor rechaza el token (VINTED_WORKER_TOKEN)");
+  } catch {}
+}
+setInterval(() => push(), 5000);
+
+// The server asks for a fresh snapshot through ntfy when the dashboard opens.
+const TOPIC = "cazapal-" + createHash("sha256").update("hunt:" + TOKEN).digest("hex").slice(0, 32);
+async function listen() {
+  for (;;) {
+    const ctl = new AbortController();
+    let dog = setTimeout(() => ctl.abort(), 100_000);
+    try {
+      const res = await fetch(`https://ntfy.sh/${TOPIC}/json`, { signal: ctl.signal });
+      const dec = new TextDecoder();
+      let buf = "";
+      for await (const chunk of res.body) {
+        clearTimeout(dog);
+        dog = setTimeout(() => ctl.abort(), 100_000);
+        buf += dec.decode(chunk, { stream: true });
+        let i;
+        while ((i = buf.indexOf("\n")) >= 0) {
+          const line = buf.slice(0, i);
+          buf = buf.slice(i + 1);
+          try {
+            if (JSON.parse(line).event === "message") {
+              watching = true;
+              push(true);
+            }
+          } catch {}
+        }
+      }
+    } catch {}
+    clearTimeout(dog);
+    await sleep(10_000);
+  }
+}
+
+// ── One listing ──
+function remember(item) {
+  S.recent.unshift(item);
+  S.recent = S.recent.slice(0, 30);
+}
+
+async function vision(urls) {
+  for (;;) {
+    try {
+      return await analyzeImages(urls);
+    } catch (e) {
+      if (String(e.message).includes("all_keys_exhausted")) {
+        status = "waiting_quota";
+        statusText = "La IA no responde o se acabó la cuota de hoy; reintento en 15 min.";
+        push(true);
+        await sleep(15 * 60_000);
+        status = "running";
+        continue;
+      }
+      throw e;
+    }
+  }
+}
+
+async function handle(l) {
+  const key = `${l.source}:${l.vintedId}`;
+  if (key in S.seen) return;
+  S.counts.seen++;
+  S.bySource[l.source].seen++;
+  const text = `${l.sellerText ?? l.title}`;
+  // Only sealed PS4 games: a strip exists only on a sealed copy.
+  const ps4 = titleNamesConsole(l.title, "ps4") || !OTHER_CONSOLE.test(l.title);
+  const claim = textSealClaim(text, l.title);
+  if (!ps4 || claim === "opened" || isLot(l.title, text) || l.photoUrls.length === 0) {
+    S.seen[key] = "-";
+    return;
+  }
+  let condition = l.sellerConditionRaw ?? null;
+  if (l.source === "wallapop") condition = (await wallapop.fetchItemCondition(l.vintedId)) ?? null;
+  const cond = conditionSealSignal(l.source, condition);
+  if (cond === "used" || (claim !== "sealed" && cond !== "sealed")) {
+    S.seen[key] = "-";
+    return;
+  }
+
+  S.counts.candidates++;
+  let v;
+  try {
+    v = await vision(l.photoUrls.slice(0, 8));
+  } catch (e) {
+    S.counts.errors++;
+    log(`error IA ${key}: ${e.message}`);
+    return; // not marked seen: retried next sweep
+  }
+  const r = combineSeal(v, l, { condition });
+  S.counts.analyzed++;
+  S.bySource[l.source].analyzed++;
+  const raw = v.stripReading;
+  const strip =
+    v.stripText ?? (raw === "otras_letras" ? "otras letras" : null);
+  S.counts.byStrip[strip ?? "none"] = (S.counts.byStrip[strip ?? "none"] ?? 0) + 1;
+  if (strip) S.counts.stripRead++;
+  const item = {
+    key,
+    source: l.source,
+    title: l.title,
+    price: l.price,
+    url: l.listingUrl,
+    photo: l.thumbUrl ?? l.photoUrls[0] ?? null,
+    strip,
+    sealed: r.sealed,
+    at: new Date().toISOString(),
+  };
+  S.seen[key] = strip ?? "";
+  remember(item);
+  log(`${key} ${strip ?? "sin tira"} · ${l.title}`);
+
+  if (strip && !STANDARD.has(strip)) {
+    // Rare: read it again from the front photo alone; both must agree.
+    let again = null;
+    try {
+      const v2 = await vision([l.photoUrls[0]]);
+      again = v2.stripText ?? (v2.stripReading === "otras_letras" ? "otras letras" : null);
+    } catch {}
+    const confirmed = again === strip;
+    S.finds.unshift({
+      ...item,
+      confirmed,
+      note: confirmed ? "Dos lecturas coinciden" : `Segunda lectura: ${again ?? "no se ve la tira"}`,
+    });
+    log(`*** HALLAZGO ${strip} (${confirmed ? "confirmado" : "por confirmar"}) ${l.listingUrl}`);
+    push(true);
+  }
+  save();
+}
+
+// ── Sweeps ──
+async function searchSource(source, q) {
+  if (source === "wallapop") return wallapop.searchListings(q, "ps4", 200);
+  const out = [];
+  for (let page = 1; page <= 3; page++) {
+    const got = await vinted.searchListings(q, "ps4", 96, page);
+    out.push(...got);
+    if (got.length < 40) break;
+  }
+  return out;
+}
+
+async function sweep() {
+  if (!S.sweep.startedAt || S.sweep.index >= QUERIES.length) {
+    S.sweep = { index: 0, startedAt: new Date().toISOString(), nextAt: null };
+  }
+  status = "running";
+  for (; S.sweep.index < QUERIES.length; S.sweep.index++) {
+    const q = QUERIES[S.sweep.index];
+    for (const source of ["wallapop", "vinted"]) {
+      current = { text: q, source };
+      statusText = `Buscando «${q}» en ${source === "vinted" ? "Vinted" : "Wallapop"}`;
+      let listings = [];
+      try {
+        listings = await searchSource(source, q);
+      } catch (e) {
+        S.counts.errors++;
+        log(`error búsqueda ${source} «${q}»: ${e.message}`);
+        if (/limit|429/i.test(e.message)) await sleep(60_000);
+        continue;
+      }
+      for (const l of listings) await handle(l);
+    }
+    save();
+  }
+  S.sweep.nextAt = new Date(Date.now() + SWEEP_PAUSE_MS).toISOString();
+  save();
+}
+
+log(`arrancado; ${QUERIES.length} búsquedas, ${Object.keys(S.seen).length} anuncios ya vistos`);
+listen();
+for (;;) {
+  try {
+    if (S.sweep.nextAt && Date.parse(S.sweep.nextAt) > Date.now()) {
+      status = "sleeping";
+      statusText = `Vuelta completada; la siguiente mira solo anuncios nuevos.`;
+      push(true);
+      await sleep(Date.parse(S.sweep.nextAt) - Date.now());
+    }
+    S.sweep.nextAt = null;
+    await sweep();
+  } catch (e) {
+    status = "error";
+    statusText = `Error: ${String(e.message).slice(0, 120)}; reintento en 5 min.`;
+    log(statusText);
+    push(true);
+    await sleep(5 * 60_000);
+  }
+}

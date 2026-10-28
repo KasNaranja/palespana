@@ -207,6 +207,8 @@ export interface VisionResult {
   sawCase?: boolean;
   // Letters on the tear strip, when the strip was seen and read.
   stripText?: SealStripText | null;
+  // The raw sealStripText when the strip was visible (see decide()).
+  stripReading?: string | null;
 }
 
 export interface ApiError {
@@ -218,4 +220,45 @@ export interface ApiError {
     | "bad_request"
     | "not_found"
     | "internal";
+}
+
+// ── Hallazgos: the rare tear-strip hunter running on the owner's PC ──
+// (worker/strip-hunter.mjs). It pushes this snapshot to the server, which
+// serves it to the "Hallazgos" dashboard.
+
+export interface HuntItem {
+  key: string; // "<source>:<id>"
+  source: MarketSource;
+  title: string;
+  price: number;
+  url: string;
+  photo: string | null;
+  strip: string | null; // letters read on the strip ("PS4", "PSP"…), null = not seen
+  sealed: SealedVerdict;
+  at: string; // ISO time it was analyzed
+}
+
+export interface HuntFind extends HuntItem {
+  confirmed: boolean; // a second, independent reading agreed
+  note: string;
+}
+
+export interface HuntSnapshot {
+  status: "running" | "waiting_quota" | "sleeping" | "error";
+  statusText: string; // one sentence in Spanish
+  startedAt: string | null; // current sweep
+  nextSweepAt: string | null; // when sleeping
+  query: { index: number; total: number; text: string; source: MarketSource | null };
+  counts: {
+    seen: number; // listings looked at (all sweeps)
+    candidates: number; // sealed PS4 candidates sent to the AI
+    analyzed: number;
+    stripRead: number;
+    byStrip: Record<string, number>; // "PS4" → n, "PlayStation" → n, "none" → n…
+    errors: number;
+  };
+  bySource: Record<MarketSource, { seen: number; analyzed: number }>;
+  recent: HuntItem[]; // newest first, ~30
+  finds: HuntFind[]; // every non-standard strip, newest first
+  updatedAt: string;
 }

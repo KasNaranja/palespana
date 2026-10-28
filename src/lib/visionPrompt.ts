@@ -333,7 +333,11 @@ export function decide(obs: Observations): VisionResult {
   const sawCase = obs.photos.some((p) =>
     ["front_cover", "back_cover", "spine_or_side"].includes(p.content)
   );
-  return { verdict, evidence, platform, sealed, sealReason, sawCase, stripText };
+  // What the model read on a visible strip, verbatim ("otras_letras" included):
+  // the rare-strip hunter wants every non-standard reading, not only the
+  // ones the filter has a chip for.
+  const stripReading = obs.sealStrip === "visible" ? obs.sealStripText : null;
+  return { verdict, evidence, platform, sealed, sealReason, sawCase, stripText, stripReading };
 }
 
 /** Parse the model's JSON reply into observations (null if unusable). */

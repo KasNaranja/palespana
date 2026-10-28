@@ -12,6 +12,7 @@ import { Results } from "@/components/Results";
 import { DemoBanner, EmptyState, ErrorState } from "@/components/States";
 import { Mirilla } from "@/components/Mirilla";
 import { Favorites } from "@/components/Favorites";
+import { Hallazgos } from "@/components/Hallazgos";
 import { getStatus, postSearch, CazaApiError } from "@/lib/api";
 import { useRecentSearches } from "@/lib/useRecentSearches";
 import { useFavorites } from "@/lib/useFavorites";
@@ -49,7 +50,7 @@ export default function Home() {
   const [precintados, setPrecintados] = useState(false);
   const [sort, setSort] = useState<SortKey>("total");
   // Footer view: the search (Caza) or the saved favorites list.
-  const [view, setView] = useState<"search" | "favorites">("search");
+  const [view, setView] = useState<"search" | "favorites" | "hallazgos">("search");
 
   const inputRef = useRef<HTMLInputElement>(null);
   const lastSubmit = useRef<{ q: string; c: ConsoleKey } | null>(null);
@@ -177,7 +178,9 @@ export default function Home() {
 
   return (
     <main className="mx-auto min-h-screen w-full max-w-6xl px-4 pb-24">
-      {view === "favorites" ? (
+      {view === "hallazgos" ? (
+        <Hallazgos />
+      ) : view === "favorites" ? (
         <Favorites />
       ) : !showResults ? (
         <section className="mx-auto max-w-2xl pt-8 sm:pt-14">
@@ -345,8 +348,8 @@ function Footer({
   view,
   onNav,
 }: {
-  view: "search" | "favorites";
-  onNav: (v: "search" | "favorites") => void;
+  view: "search" | "favorites" | "hallazgos";
+  onNav: (v: "search" | "favorites" | "hallazgos") => void;
 }) {
   // Fixed bottom nav, Vinted-style: Caza (buscador) · corazón (favoritos) ·
   // Precios. The white logos read on the dark bar.
@@ -416,6 +419,23 @@ function Footer({
           <Mirilla size={28} />
           <span className="font-display text-[12px] leading-none tracking-wide text-texto-1">
             PRECIOS
+          </span>
+        </button>
+
+        {/* Hallazgos — rastreador de tiras raras (lupa roja + palabra) */}
+        <button
+          type="button"
+          onClick={() => onNav("hallazgos")}
+          aria-label="Hallazgos"
+          aria-current={view === "hallazgos"}
+          className="flex flex-1 flex-col items-center justify-center gap-1 py-2 transition hover:bg-white/5"
+        >
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" aria-hidden className="text-brand-500">
+            <circle cx="10.5" cy="10.5" r="6.5" stroke="currentColor" strokeWidth="2" fill={view === "hallazgos" ? "currentColor" : "none"} fillOpacity="0.25" />
+            <path d="m15.5 15.5 5 5" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" />
+          </svg>
+          <span className="font-display text-[12px] leading-none tracking-wide text-texto-1">
+            HALLAZGOS
           </span>
         </button>
       </div>
