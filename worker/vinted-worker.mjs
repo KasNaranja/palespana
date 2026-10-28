@@ -138,14 +138,25 @@ function wake(reason) {
 }
 
 // ── Idle: wait for the server's "wake" on ntfy ──
+// ntfy sends a keepalive every ~45 s; silence longer than this means the
+// connection died quietly (sleep, Wi-Fi change…) and must be reopened.
+const SILENCE_MS = 100_000;
+
 async function listen() {
+  // On reconnect, ask for anything posted while we were away.
+  let since = "";
   for (;;) {
+    const ctl = new AbortController();
+    let watchdog = setTimeout(() => ctl.abort(), SILENCE_MS);
     try {
-      const res = await fetch(`https://ntfy.sh/${TOPIC}/json`);
+      const res = await fetch(`https://ntfy.sh/${TOPIC}/json${since ? `?since=${since}` : ""}`, { signal: ctl.signal });
       if (!res.ok || !res.body) throw new Error(`ntfy ${res.status}`);
       let buf = "";
       const dec = new TextDecoder();
       for await (const chunk of res.body) {
+        clearTimeout(watchdog);
+        watchdog = setTimeout(() => ctl.abort(), SILENCE_MS);
+        since = String(Math.floor(Date.now() / 1000) - 5);
         buf += dec.decode(chunk, { stream: true });
         let i;
         while ((i = buf.indexOf("\n")) >= 0) {
@@ -158,6 +169,8 @@ async function listen() {
       }
     } catch (e) {
       log(`aviso desconectado (${e.message}); reconecto en 10 s`);
+    } finally {
+      clearTimeout(watchdog);
     }
     await sleep(10_000);
   }

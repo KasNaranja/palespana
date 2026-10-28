@@ -36,7 +36,7 @@ interface State {
   waiters: ((job: PendingJob | null) => void)[]; // PC polls waiting for a job
   lastSeen: number; // last poll from the PC
   seq: number;
-  stats: { ok: number; fail: number; wakes: number; lastError: string };
+  stats: { ok: number; fail: number; wakes: number; lastError: string; lastWake: string };
 }
 
 // globalThis: the search route and the worker routes may be separate module
@@ -48,7 +48,7 @@ const state: State = (g.__cazapalVintedWorker ??= {
   waiters: [],
   lastSeen: 0,
   seq: 0,
-  stats: { ok: 0, fail: 0, wakes: 0, lastError: "" },
+  stats: { ok: 0, fail: 0, wakes: 0, lastError: "", lastWake: "" },
 });
 
 // A PC that polled this recently is listening; otherwise it's asleep (or off).
@@ -96,11 +96,19 @@ function ensureOnline(): Promise<boolean> {
   wakeInFlight ??= (async () => {
     try {
       state.stats.wakes++;
-      await fetch(`https://ntfy.sh/${wakeTopic(config.vintedWorker.token)}`, {
-        method: "POST",
-        body: "wake",
-        signal: AbortSignal.timeout(8_000),
-      }).catch(() => {});
+      // Recorded in /api/health: a wake that never reaches ntfy otherwise
+      // looks exactly like a PC that is off.
+      try {
+        const r = await fetch(`https://ntfy.sh/${wakeTopic(config.vintedWorker.token)}`, {
+          method: "POST",
+          headers: { "Content-Type": "text/plain" },
+          body: "wake",
+          signal: AbortSignal.timeout(8_000),
+        });
+        state.stats.lastWake = `${r.status} ${(await r.text().catch(() => "")).slice(0, 120)}`;
+      } catch (e) {
+        state.stats.lastWake = `error ${(e as Error).message}`.slice(0, 160);
+      }
       const until = Date.now() + WAKE_WAIT_MS;
       while (Date.now() < until) {
         if (Date.now() - state.lastSeen < ONLINE_MS) return true;
