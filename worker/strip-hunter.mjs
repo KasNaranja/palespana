@@ -116,6 +116,7 @@ const blank = () => ({
   sweep: { index: 0, startedAt: null, nextAt: null },
   gameOf: {}, // listing key → the game search that found it first
   items: {}, // sealed listing key → {t: title, u: url, p: photo, $: price}, for the per-game lists
+  claimChecked: {}, // keys whose seller-claimed rare strip was already looked for (see claimedStrip)
   paused: false,
 });
 let S = fs.existsSync(STATE_FILE) ? { ...blank(), ...JSON.parse(fs.readFileSync(STATE_FILE, "utf8")) } : blank();
@@ -387,14 +388,18 @@ const readStrip = (v) => v.stripText ?? (v.stripReading === "otras_letras" ? "ot
 // No letters from the first look: the strip may be in another photo. Vinted's
 // search gives only the cover, so open the listing for its gallery; then look
 // at the other photos one by one (each gets the magnifier).
-async function morePhotos(l, key) {
-  let photos = l.photoUrls;
+async function galleryOf(l) {
   if (l.source === "vinted") {
     try {
       const g = await vinted.fetchListingPhotos(l.vintedId);
-      if (g.length) photos = g;
+      if (g.length) return g;
     } catch {}
   }
+  return l.photoUrls;
+}
+
+async function morePhotos(l, key) {
+  const photos = await galleryOf(l);
   const out = { strip: null, raw: null, photo: null };
   const others = photos.filter((p) => p !== l.photoUrls[0]).slice(0, 4);
   for (const p of others) {
@@ -412,6 +417,70 @@ async function morePhotos(l, key) {
   return out;
 }
 
+// Sellers of a wrong strip say so ("en la tira del precinto pone PSP"). Looking
+// at every photo at once the AI can still take the PSP letters for PS4 (a
+// graded PSP-strip Broken Sword 5 on Wallapop was read "PS4"), so such a copy
+// gets each photo read on its own; if none shows it, it still goes to the
+// finds, "por confirmar", for a look by hand.
+const RARE_CLAIM = [
+  ["PSP", /psp/i],
+  ["PS3", /ps ?3/i],
+  ["PS Vita", /vita/i],
+  ["Blu-ray Disc", /blu-?ray/i],
+];
+const NEAR_STRIP =
+  /\b(tira|precinto|strip|film)\b[^.\n]{0,40}\b(psp|ps ?3|vita|blu-?ray)\b|\b(psp|ps ?3|vita|blu-?ray)\b[^.\n]{0,25}\b(tira|precinto|strip|film)\b/i;
+function claimedStrip(l) {
+  const m = (l.sellerText ?? l.title).match(NEAR_STRIP);
+  if (!m) return null;
+  return RARE_CLAIM.find(([, re]) => re.test(m[2] ?? m[3]))?.[0] ?? null;
+}
+
+async function readEachPhoto(l) {
+  for (const p of (await galleryOf(l)).slice(0, 8)) {
+    let v;
+    try {
+      v = await vision([p]);
+    } catch {
+      break;
+    }
+    const s = readStrip(v);
+    if (s && !STANDARD.has(s)) return { strip: s, photo: p };
+  }
+  return null;
+}
+
+function sellerFind(item, said) {
+  S.finds.unshift({
+    ...item,
+    strip: said,
+    confirmed: false,
+    note: `Lo dice el vendedor; la IA lee ${item.strip ?? "nada"} en las fotos`,
+  });
+  log(`*** HALLAZGO ${said} (según el vendedor) ${item.url}`);
+  push(true);
+  save();
+}
+
+// A copy analyzed before claimedStrip existed: look again once.
+async function recheckClaim(l, key, said) {
+  S.claimChecked[key] = 1;
+  await waitIfPaused();
+  const old = S.seen[key];
+  const c = await readEachPhoto(l);
+  if (c) {
+    if (STANDARD.has(old)) {
+      S.counts.byStrip[old]--;
+      S.counts.stripRead--;
+      S.bySource[l.source].stripRead--;
+    }
+    log(`${key} el vendedor dice ${said}: leída al mirar foto a foto`);
+    record(l, key, c.strip, null, "yes", c.photo);
+    return;
+  }
+  sellerFind(itemOf(l, key, STANDARD.has(old) ? old : null, null, "yes"), said);
+}
+
 // S.seen values: a strip; "-" not a candidate; "x" analyzed, not sealed;
 // "0" analyzed, no strip after
 // every photo; "" analyzed by an older version on the first photo only, so it
@@ -422,6 +491,8 @@ async function handle(l) {
   if (key in S.seen) {
     const v = S.seen[key];
     if (v !== "-" && v !== "x" && !S.items[key]?.u) keepItem(l, key);
+    const said = (STANDARD.has(v) || v === "0") && !S.claimChecked[key] && claimedStrip(l);
+    if (said) await recheckClaim(l, key, said);
     return;
   }
   await waitIfPaused();
@@ -464,6 +535,12 @@ async function handle(l) {
     if (m.strip) ({ strip, raw, photo: stripPhoto } = m);
     else if (m.raw) raw = m.raw;
   }
+  const said = claimedStrip(l);
+  if (said && strip !== said && r.sealed !== "no") {
+    S.claimChecked[key] = 1;
+    const c = await readEachPhoto(l);
+    if (c) ({ strip, photo: stripPhoto } = c);
+  }
   // Why no letters, when none: worth a manual look only if "ilegible".
   const reason = strip
     ? null
@@ -474,7 +551,8 @@ async function handle(l) {
         : r.sealed === "no"
           ? "no precintado"
           : "sin tira visible";
-  record(l, key, strip, reason, r.sealed, stripPhoto);
+  const item = record(l, key, strip, reason, r.sealed, stripPhoto);
+  if (said && r.sealed !== "no" && (!strip || STANDARD.has(strip))) sellerFind(item, said);
 }
 
 async function retryMorePhotos(l, key) {
@@ -517,7 +595,18 @@ function record(l, key, strip, reason, sealed, stripPhoto) {
     S.counts.stripRead++;
     S.bySource[l.source].stripRead = (S.bySource[l.source].stripRead ?? 0) + 1;
   }
-  const item = {
+  const item = itemOf(l, key, strip, reason, sealed);
+  S.seen[key] = strip ?? (sealed === "no" ? "x" : "0");
+  if (sealed !== "no") keepItem(l, key);
+  remember(item);
+  log(`${key} ${strip ?? reason} · ${l.title}`);
+  save();
+  if (strip && !STANDARD.has(strip)) confirmRare(item, stripPhoto, l.listingUrl);
+  return item;
+}
+
+function itemOf(l, key, strip, reason, sealed) {
+  return {
     key,
     source: l.source,
     title: l.title,
@@ -529,12 +618,6 @@ function record(l, key, strip, reason, sealed, stripPhoto) {
     sealed,
     at: new Date().toISOString(),
   };
-  S.seen[key] = strip ?? (sealed === "no" ? "x" : "0");
-  if (sealed !== "no") keepItem(l, key);
-  remember(item);
-  log(`${key} ${strip ?? reason} · ${l.title}`);
-  save();
-  if (strip && !STANDARD.has(strip)) confirmRare(item, stripPhoto, l.listingUrl);
 }
 
 async function confirmRare(item, stripPhoto, url) {
