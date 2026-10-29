@@ -263,7 +263,19 @@ export interface HuntSnapshot {
   recent: HuntItem[]; // newest first, ~30
   finds: HuntFind[]; // every non-standard strip, newest first
   games?: HuntGame[]; // per-game summary, in search order
+  selection?: { game: string; items: HuntPick[] } | null; // last game asked for
   updatedAt: string;
+}
+
+/** A sealed copy of one game, for the list behind the per-game numbers. */
+export interface HuntPick {
+  key: string;
+  source: MarketSource;
+  title: string;
+  url: string | null; // null = older Wallapop copy, link not known yet
+  photo: string | null;
+  price: number | null;
+  strip: string | null; // null = not readable
 }
 
 /** One game the hunter searches, every copy of it on every marketplace. */

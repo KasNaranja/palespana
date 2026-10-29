@@ -14,6 +14,7 @@ import {
   type HuntFind,
   type HuntGame,
   type HuntItem,
+  type HuntPick,
   type HuntSnapshot,
 } from "@/lib/types";
 
@@ -125,22 +126,135 @@ const GAME_STATUS: Record<HuntGame["status"], string> = {
   pending: "pendiente",
 };
 
-function Num({ n, strong }: { n: number; strong?: boolean }) {
+function Num({
+  n,
+  strong,
+  onPick,
+  active,
+}: {
+  n: number;
+  strong?: boolean;
+  onPick?: () => void;
+  active?: boolean;
+}) {
+  const color = n === 0 ? "text-texto-3" : strong ? "font-bold text-brand-500" : "text-texto-1";
   return (
-    <td
-      className={[
-        "px-2 py-2 text-right tabular-nums",
-        n === 0 ? "text-texto-3" : strong ? "font-bold text-brand-500" : "text-texto-1",
-      ].join(" ")}
-    >
-      {n}
+    <td className="px-2 py-1 text-right tabular-nums">
+      {onPick && n > 0 ? (
+        <button
+          type="button"
+          onClick={onPick}
+          className={[
+            "min-h-[32px] rounded px-2 underline decoration-dotted underline-offset-4 hover:bg-white/10",
+            color,
+            active ? "bg-white/15" : "",
+          ].join(" ")}
+        >
+          {n}
+        </button>
+      ) : (
+        <span className={["px-2", color].join(" ")}>{n}</span>
+      )}
     </td>
   );
 }
 
+// The columns of the per-game table that open the list of their copies.
+type PickCol = "sealed" | "ps4" | "playstation" | "rare" | "unread";
+const PICK_LABEL: Record<PickCol, string> = {
+  sealed: "precintados",
+  ps4: "con tira PS4",
+  playstation: "con tira PlayStation",
+  rare: "con tira rara",
+  unread: "sin tira legible",
+};
+function inCol(p: HuntPick, col: PickCol): boolean {
+  if (col === "sealed") return true;
+  if (col === "ps4") return p.strip === "PS4";
+  if (col === "playstation") return p.strip === "PlayStation";
+  if (col === "unread") return p.strip === null;
+  return p.strip !== null && !STANDARD.has(p.strip);
+}
+
+// The copies behind one number of the table, as sent by the PC.
+function PickList({
+  pick,
+  selection,
+  onClose,
+}: {
+  pick: { game: string; col: PickCol };
+  selection: HuntSnapshot["selection"];
+  onClose: () => void;
+}) {
+  const ready = selection?.game === pick.game;
+  const items = ready ? selection.items.filter((p) => inCol(p, pick.col)) : [];
+  return (
+    <div className="border-t border-borde bg-carbon/40 p-3">
+      <div className="mb-2 flex items-center gap-2">
+        <h3 className="text-sm font-semibold text-texto-1">
+          <span className="capitalize">{pick.game}</span> · {PICK_LABEL[pick.col]}
+          {ready && ` (${items.length})`}
+        </h3>
+        <button type="button" onClick={onClose} className="ml-auto min-h-[32px] px-2 text-xs text-texto-3 hover:text-texto-1">
+          Cerrar
+        </button>
+      </div>
+      {!ready ? (
+        <p className="text-sm text-texto-3">Pidiendo la lista a tu PC…</p>
+      ) : (
+        <div className="grid gap-1.5 sm:grid-cols-2">
+          {items.map((p) => {
+            const href =
+              p.url ?? `https://es.wallapop.com/search?keywords=${encodeURIComponent(p.title)}`;
+            return (
+              <a
+                key={p.key}
+                href={href}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex min-h-[48px] items-center gap-2.5 rounded-lg border border-borde bg-panel p-1.5 hover:border-brand-500"
+              >
+                <div className="h-10 w-8 shrink-0 overflow-hidden rounded bg-carbon">
+                  {p.photo && (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={p.photo} alt="" loading="lazy" className="h-full w-full object-cover" />
+                  )}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-sm text-texto-1">{p.title}</div>
+                  <div className="text-xs text-texto-3">
+                    {MARKET_LABELS[p.source]}
+                    {p.price != null && ` · ${formatPrice(p.price, "EUR")}`}
+                    {!p.url && " · buscar en Wallapop"}
+                  </div>
+                </div>
+                <StripTag strip={p.strip} reason="sin leer" />
+              </a>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Every copy of each game: the main view. Pending games are folded away.
-function GameTable({ games }: { games: HuntGame[] }) {
+function GameTable({
+  games,
+  selection,
+  onAsk,
+}: {
+  games: HuntGame[];
+  selection: HuntSnapshot["selection"];
+  onAsk: (game: string) => void;
+}) {
   const [showPending, setShowPending] = useState(false);
+  const [pick, setPick] = useState<{ game: string; col: PickCol } | null>(null);
+  const picker = (game: string, col: PickCol) => () => {
+    setPick({ game, col });
+    onAsk(game);
+  };
+  const on = (game: string, col: PickCol) => pick?.game === game && pick.col === col;
   const started = games.filter((g) => g.status !== "pending");
   const pending = games.filter((g) => g.status === "pending");
   const rows = showPending ? games : started;
@@ -180,15 +294,16 @@ function GameTable({ games }: { games: HuntGame[] }) {
                 </span>
               </td>
               <Num n={g.seen} />
-              <Num n={g.sealed} />
-              <Num n={g.ps4} />
-              <Num n={g.playstation} />
-              <Num n={g.rare} strong />
-              <Num n={g.unread} />
+              <Num n={g.sealed} onPick={picker(g.name, "sealed")} active={on(g.name, "sealed")} />
+              <Num n={g.ps4} onPick={picker(g.name, "ps4")} active={on(g.name, "ps4")} />
+              <Num n={g.playstation} onPick={picker(g.name, "playstation")} active={on(g.name, "playstation")} />
+              <Num n={g.rare} strong onPick={picker(g.name, "rare")} active={on(g.name, "rare")} />
+              <Num n={g.unread} onPick={picker(g.name, "unread")} active={on(g.name, "unread")} />
             </tr>
           ))}
         </tbody>
       </table>
+      {pick && <PickList pick={pick} selection={selection} onClose={() => setPick(null)} />}
       {pending.length > 0 && (
         <button
           type="button"
@@ -394,7 +509,14 @@ export function Hallazgos() {
           {s.games && (
             <div>
               <h2 className="mb-3 font-display text-xl text-white">Resumen por juego</h2>
-              <GameTable games={s.games} />
+              <GameTable
+                games={s.games}
+                selection={s.selection}
+                onAsk={(game) => {
+                  lastAsk.current = Date.now();
+                  void signalPc("hunt", "list:" + game);
+                }}
+              />
             </div>
           )}
 

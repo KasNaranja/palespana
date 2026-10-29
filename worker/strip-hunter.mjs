@@ -115,6 +115,7 @@ const blank = () => ({
   },
   sweep: { index: 0, startedAt: null, nextAt: null },
   gameOf: {}, // listing key → the game search that found it first
+  items: {}, // sealed listing key → {t: title, u: url, p: photo, $: price}, for the per-game lists
   paused: false,
 });
 let S = fs.existsSync(STATE_FILE) ? { ...blank(), ...JSON.parse(fs.readFileSync(STATE_FILE, "utf8")) } : blank();
@@ -123,6 +124,17 @@ let S = fs.existsSync(STATE_FILE) ? { ...blank(), ...JSON.parse(fs.readFileSync(
 for (const src of Object.keys(S.bySource)) S.bySource[src].stripRead = 0;
 for (const [k, v] of Object.entries(S.seen)) {
   if (v && v !== "-" && v !== "0" && v !== "x") S.bySource[k.split(":")[0]].stripRead++;
+}
+// Sealed copies analyzed before S.items existed: title from the log (the
+// link and photo arrive when a search returns them again, see handle()).
+if (Object.keys(S.items).length === 0) {
+  for (const file of [path.join(DIR, "hunter.log.old"), path.join(DIR, "hunter.log")]) {
+    if (!fs.existsSync(file)) continue;
+    for (const line of fs.readFileSync(file, "utf8").split("\n")) {
+      const m = line.match(/^\S+ ((?:vinted|wallapop|ebay):\S+) .*? · (.+)$/);
+      if (m && !(m[1] in S.items)) S.items[m[1]] = { t: m[2] };
+    }
+  }
 }
 let saveTimer = null;
 function save() {
@@ -162,6 +174,7 @@ function snapshot() {
     recent: S.recent.slice(0, 30),
     finds: S.finds,
     games: gameSummary(),
+    selection,
     updatedAt: new Date().toISOString(),
   };
 }
@@ -239,10 +252,35 @@ function onCommand(cmd) {
     log("play pedido desde la web");
     save();
     interrupt();
+  } else if (cmd.startsWith("list:")) {
+    selection = listGame(cmd.slice(5));
   } else if (cmd === "purge") {
     purgeNotPs4();
   }
   push(true);
+}
+
+// The sealed copies of one game, asked for by the dashboard (a click on a
+// number of the per-game table).
+let selection = null;
+function listGame(game) {
+  const items = [];
+  for (const [key, g] of Object.entries(S.gameOf)) {
+    const v = S.seen[key];
+    if (g !== game || v === undefined || v === "-" || v === "x") continue;
+    const [source, id] = key.split(":");
+    const it = S.items[key] ?? {};
+    items.push({
+      key,
+      source,
+      title: it.t ?? key,
+      url: it.u ?? (source === "vinted" ? `https://www.vinted.es/items/${id}` : null),
+      photo: it.p ?? null,
+      price: it.$ ?? null,
+      strip: v === "" || v === "0" ? null : v,
+    });
+  }
+  return { game, items };
 }
 
 /** Drops finds whose title names another console (false positives from
@@ -381,7 +419,11 @@ async function morePhotos(l, key) {
 async function handle(l) {
   const key = `${l.source}:${l.vintedId}`;
   if (S.seen[key] === "") return retryMorePhotos(l, key);
-  if (key in S.seen) return;
+  if (key in S.seen) {
+    const v = S.seen[key];
+    if (v !== "-" && v !== "x" && !S.items[key]?.u) keepItem(l, key);
+    return;
+  }
   await waitIfPaused();
   S.counts.seen++;
   S.bySource[l.source].seen++;
@@ -463,6 +505,11 @@ async function retryMorePhotos(l, key) {
   record(l, key, m.strip, null, "yes", m.photo);
 }
 
+function keepItem(l, key) {
+  S.items[key] = { t: l.title, u: l.listingUrl, p: l.thumbUrl ?? l.photoUrls[0] ?? null, $: l.price };
+  save();
+}
+
 function record(l, key, strip, reason, sealed, stripPhoto) {
   const bucket = strip ?? reason;
   S.counts.byStrip[bucket] = (S.counts.byStrip[bucket] ?? 0) + 1;
@@ -483,6 +530,7 @@ function record(l, key, strip, reason, sealed, stripPhoto) {
     at: new Date().toISOString(),
   };
   S.seen[key] = strip ?? (sealed === "no" ? "x" : "0");
+  if (sealed !== "no") keepItem(l, key);
   remember(item);
   log(`${key} ${strip ?? reason} · ${l.title}`);
   save();
