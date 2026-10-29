@@ -27,7 +27,10 @@ const ALLOWED = new Set(["image/jpeg", "image/png", "image/webp"]);
 
 async function downloadImage(url: string): Promise<ImagePart | null> {
   try {
-    const res = await fetch(url, { redirect: "follow" });
+    // Bounded: a photo server that stalls mid-response would otherwise hang
+    // this analysis worker forever, and with every worker stuck the search
+    // froze (startAnalysis still counted it as running, so no self-heal).
+    const res = await fetch(url, { redirect: "follow", signal: AbortSignal.timeout(20_000) });
     if (!res.ok) return null;
     let mt = (res.headers.get("content-type") || "").split(";")[0].trim();
     const buf = Buffer.from(await res.arrayBuffer());
