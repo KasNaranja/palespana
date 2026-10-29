@@ -58,7 +58,22 @@ function mergeCookies(headers) {
   cookieJar = [...pairs.values()].join("; ");
 }
 
+// A real catalog or item page weighs over 1 MB. A ~19 KB 200 is Vinted's
+// stripped page for a session it distrusts: once it starts, every request with
+// those cookies gets it, so drop them and ask again with a fresh session.
+const STRIPPED_MAX = 100_000;
+
 async function fetchVinted(host, p) {
+  const r = await fetchVintedOnce(host, p);
+  if (r.status === 200 && r.body.length < STRIPPED_MAX && /^\/(catalog|items)/.test(p) && cookieJar) {
+    log(`página recortada (${Math.round(r.body.length / 1024)} KB): cookies nuevas y reintento`);
+    cookieJar = "";
+    return fetchVintedOnce(host, p);
+  }
+  return r;
+}
+
+async function fetchVintedOnce(host, p) {
   // Only Vinted, only a path on it.
   if (!/^www\.vinted\.[a-z]{2,3}(\.[a-z]{2})?$/.test(host) || !p.startsWith("/") || p.startsWith("//")) {
     return { status: 0, body: "" };
