@@ -2,6 +2,7 @@
 import type {
   ApiError,
   ConsoleKey,
+  KnownVerdict,
   SearchResponse,
   StatusResponse,
 } from "./types";
@@ -36,12 +37,13 @@ async function asError(res: Response): Promise<CazaApiError> {
 export async function postSearch(
   query: string,
   consoleKey: ConsoleKey,
-  supersedes?: string
+  supersedes?: string,
+  known?: KnownVerdict[]
 ): Promise<SearchResponse> {
   const res = await fetch("/api/search", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ query, console: consoleKey, supersedes }),
+    body: JSON.stringify({ query, console: consoleKey, supersedes, known }),
   });
   if (!res.ok) throw await asError(res);
   return res.json();

@@ -20,6 +20,7 @@ import { publicListing } from "@/lib/types";
 import type {
   ApiError,
   ConsoleKey,
+  KnownVerdict,
   Listing,
   MarketSource,
   SearchMeta,
@@ -44,6 +45,32 @@ const VALID_CONSOLES: ConsoleKey[] = [
 ];
 
 const CAP = COST_GUARD.MAX_LISTINGS_PER_SEARCH;
+
+const VERDICTS = new Set(["es", "es_multi", "other", "inconclusive"]);
+
+/** A re-run of a search the server lost (see page.tsx): the copies the
+ *  browser had already seen analyzed keep their verdict instead of going
+ *  back to the queue. Only the client's own results, so the worst a forged
+ *  one can do is mislabel that client's cards. */
+function applyKnown(listings: Listing[], known: unknown): void {
+  if (!Array.isArray(known)) return;
+  const byKey = new Map<string, KnownVerdict>();
+  for (const k of known.slice(0, 500) as KnownVerdict[]) {
+    if (k && typeof k.vintedId === "string" && VERDICTS.has(k.languageVerdict)) {
+      byKey.set(`${k.source}:${k.vintedId}`, k);
+    }
+  }
+  for (const l of listings) {
+    const k = byKey.get(`${l.source}:${l.vintedId}`);
+    if (!k) continue;
+    l.languageVerdict = k.languageVerdict;
+    l.verdictEvidence = typeof k.verdictEvidence === "string" ? k.verdictEvidence.slice(0, 300) : null;
+    l.detectedPlatform = k.detectedPlatform ?? "unknown";
+    l.sealed = k.sealed ?? "unknown";
+    l.sealStrip = k.sealStrip ?? null;
+    l.analyzedAt = typeof k.analyzedAt === "string" ? k.analyzedAt : new Date().toISOString();
+  }
+}
 
 interface SourceResult {
   listings: Listing[];
@@ -87,7 +114,7 @@ async function fetchSource(
 
 export async function POST(req: Request) {
   ensureRuntimeSampler();
-  let body: { query?: string; console?: string; supersedes?: string };
+  let body: { query?: string; console?: string; supersedes?: string; known?: unknown };
   try {
     body = await req.json();
   } catch {
@@ -229,6 +256,7 @@ export async function POST(req: Request) {
     sources,
   };
 
+  applyKnown(listings, body.known);
   createSearch(meta, listings);
 
   // Fire-and-forget: analysis runs in the background; the UI polls /status.

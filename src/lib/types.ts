@@ -184,6 +184,20 @@ export interface StatusResponse {
   sources: Record<MarketSource, SourceProgress>; // one entry per marketplace
 }
 
+/** A verdict the browser already had, handed back when it re-runs a search
+ *  the server lost (restart), so finished analyses aren't paid for twice. */
+export type KnownVerdict = Pick<
+  Listing,
+  | "source"
+  | "vintedId"
+  | "languageVerdict"
+  | "verdictEvidence"
+  | "detectedPlatform"
+  | "sealed"
+  | "sealStrip"
+  | "analyzedAt"
+>;
+
 /** The strict JSON we require back from the vision model. */
 export interface VisionResult {
   verdict: "es" | "es_multi" | "other" | "inconclusive";

@@ -21,6 +21,7 @@ import { consoleKeep } from "@/lib/filter";
 import { MARKET_LABELS, MARKET_SOURCES } from "@/lib/types";
 import type {
   ConsoleKey,
+  KnownVerdict,
   Listing,
   MarketSource,
   SearchResponse,
@@ -59,13 +60,17 @@ export default function Home() {
   const activeId = useRef<string | null>(null);
   const { recent, add, clear } = useRecentSearches();
 
-  const search = useMutation<SearchResponse, CazaApiError, { q: string; c: ConsoleKey }>(
+  const search = useMutation<
+    SearchResponse,
+    CazaApiError,
+    { q: string; c: ConsoleKey; known?: KnownVerdict[] }
+  >(
     {
       // Wake the PC that fetches Vinted (it sleeps between searches) while
       // the server starts the search; the server waits for it to come online.
-      mutationFn: ({ q, c }) => {
+      mutationFn: ({ q, c, known }) => {
         void signalPc("wake", "wake");
-        return postSearch(q, c, activeId.current ?? undefined);
+        return postSearch(q, c, activeId.current ?? undefined, known);
       },
       onSuccess: (data) => {
         activeId.current = data.search.id;
@@ -102,8 +107,10 @@ export default function Home() {
   // Searches live in the server's memory. When Render restarts the instance
   // (free tier: sleep after inactivity, crash, redeploy) mid-analysis, /status
   // answers 404 forever and the screen froze at "0 de N". Re-run the same
-  // search instead, keeping the user's filters. Capped per user search so a
-  // server that keeps restarting can't loop us.
+  // search instead, keeping the user's filters AND the verdicts already on
+  // screen (sent back so the server doesn't analyze them again), and keep
+  // showing the results meanwhile. Capped per user search so a server that
+  // keeps restarting can't loop us.
   const autoResumes = useRef(0);
   useEffect(() => {
     const err = status.error;
@@ -112,8 +119,20 @@ export default function Home() {
       return;
     }
     autoResumes.current += 1;
-    search.mutate(lastSubmit.current);
-  }, [status.error, search]);
+    const known = (status.data?.listings ?? [])
+      .filter((l) => l.languageVerdict !== "pending")
+      .map((l) => ({
+        source: l.source,
+        vintedId: l.vintedId,
+        languageVerdict: l.languageVerdict,
+        verdictEvidence: l.verdictEvidence,
+        detectedPlatform: l.detectedPlatform,
+        sealed: l.sealed,
+        sealStrip: l.sealStrip,
+        analyzedAt: l.analyzedAt,
+      }));
+    search.mutate({ ...lastSubmit.current, known });
+  }, [status.error, status.data, search]);
 
   const submit = useCallback(
     (q: string, c: ConsoleKey) => {
@@ -249,7 +268,7 @@ export default function Home() {
             <div className="pt-10">
               <ErrorState message={search.error.message} onRetry={retry} />
             </div>
-          ) : search.isPending ? (
+          ) : search.isPending && !(active && search.variables?.known) ? (
             <div>
               <div className="flex items-center justify-center gap-3 py-6 text-texto-2">
                 <Mirilla size={30} spinning />
