@@ -474,12 +474,10 @@ function uncount(source, strip) {
   S.bySource[source].stripRead--;
 }
 
-// Copies read "PS4" before the second look existed, re-read at night (when
-// nobody uses the website's share of the Gemini quota).
-const isNight = () => {
-  const h = new Date().getHours();
-  return h >= 1 && h < 8;
-};
+// Copies read "PS4" before the second look existed get it too, a batch after
+// each game searched so the sweep keeps moving. (Not "at night only": the
+// free quota resets at 9:00 Spanish time, so the night is when it's spent.)
+const BACKLOG_BATCH = 20;
 
 async function listingFor(key) {
   const [source, id] = key.split(":");
@@ -516,13 +514,12 @@ async function listingFor(key) {
   return null;
 }
 
-async function ps4Backlog() {
+async function ps4Backlog(batch = BACKLOG_BATCH) {
   const todo = Object.keys(S.seen).filter((k) => S.seen[k] === "PS4" && !S.ps4Checked[k]);
-  for (const [i, key] of todo.entries()) {
-    if (!isNight()) return;
+  for (const key of todo.slice(0, batch)) {
     await waitIfPaused();
     status = "running";
-    statusText = `Noche: repasando tiras «PS4» ya vistas, foto a foto (${i + 1} de ${todo.length})`;
+    statusText = `Repasando foto a foto las tiras «PS4» ya vistas (quedan ${todo.length})`;
     const l = await listingFor(key);
     if (l === undefined) continue;
     S.ps4Checked[key] = 1;
@@ -531,7 +528,7 @@ async function ps4Backlog() {
       const said = claimedStrip(l);
       if (c) {
         uncount(l.source, "PS4");
-        log(`${key} repaso nocturno: no era PS4`);
+        log(`${key} repaso: no era PS4`);
         record(l, key, c.strip, null, "yes", c.photo);
       } else if (said) {
         sellerFind(itemOf(l, key, "PS4", null, "yes"), said);
@@ -782,13 +779,12 @@ listen();
 for (;;) {
   try {
     await waitIfPaused();
-    while (S.sweep.nextAt && Date.parse(S.sweep.nextAt) > Date.now()) {
-      await ps4Backlog();
+    if (S.sweep.nextAt && Date.parse(S.sweep.nextAt) > Date.now()) {
+      await ps4Backlog(Infinity);
       status = "sleeping";
       statusText = `Vuelta completada; la siguiente mira solo anuncios nuevos.`;
       push(true);
-      // Wake hourly so the night's backlog starts on time.
-      await nap(Math.min(Date.parse(S.sweep.nextAt) - Date.now(), 3600_000));
+      await nap(Date.parse(S.sweep.nextAt) - Date.now());
       await waitIfPaused();
     }
     S.sweep.nextAt = null;
