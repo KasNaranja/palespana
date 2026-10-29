@@ -117,6 +117,7 @@ const blank = () => ({
   gameOf: {}, // listing key → the game search that found it first
   items: {}, // sealed listing key → {t: title, u: url, p: photo, $: price}, for the per-game lists
   claimChecked: {}, // keys whose seller-claimed rare strip was already looked for (see claimedStrip)
+  ps4Checked: {}, // keys read "PS4" that got the photo-by-photo second look (see ps4Backlog)
   paused: false,
 });
 let S = fs.existsSync(STATE_FILE) ? { ...blank(), ...JSON.parse(fs.readFileSync(STATE_FILE, "utf8")) } : blank();
@@ -436,8 +437,8 @@ function claimedStrip(l) {
   return RARE_CLAIM.find(([, re]) => re.test(m[2] ?? m[3]))?.[0] ?? null;
 }
 
-async function readEachPhoto(l) {
-  for (const p of (await galleryOf(l)).slice(0, 8)) {
+async function readEachPhoto(l, max = 8, photos = null) {
+  for (const p of (photos ?? (await galleryOf(l))).slice(0, max)) {
     let v;
     try {
       v = await vision([p]);
@@ -462,6 +463,84 @@ function sellerFind(item, said) {
   save();
 }
 
+// "PS4" is the commonest reading and the one PSP letters get taken for: the
+// first photos get a second look one by one (a close-up of the strip is often
+// the 2nd or 3rd photo, while the magnifier only zooms the 1st).
+const SECOND_LOOK_PHOTOS = 3;
+
+function uncount(source, strip) {
+  S.counts.byStrip[strip]--;
+  S.counts.stripRead--;
+  S.bySource[source].stripRead--;
+}
+
+// Copies read "PS4" before the second look existed, re-read at night (when
+// nobody uses the website's share of the Gemini quota).
+const isNight = () => {
+  const h = new Date().getHours();
+  return h >= 1 && h < 8;
+};
+
+async function listingFor(key) {
+  const [source, id] = key.split(":");
+  const it = S.items[key] ?? {};
+  if (source === "wallapop") {
+    try {
+      const r = await fetch(`https://api.wallapop.com/api/v3/items/${encodeURIComponent(id)}`, {
+        headers: { "User-Agent": "Mozilla/5.0", "X-DeviceOS": "0" },
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (!r.ok) return null; // sold or removed
+      const j = await r.json();
+      const photos = (j.images ?? []).map((i) => i.urls?.big ?? i.urls?.medium).filter(Boolean);
+      const title = j.title?.original ?? it.t ?? "";
+      return {
+        source, vintedId: id, title, price: j.price?.amount ?? it.$ ?? null,
+        listingUrl: j.web_slug ? `https://es.wallapop.com/item/${j.web_slug}` : it.u ?? null,
+        thumbUrl: it.p ?? photos[0] ?? null, photoUrls: photos,
+        sellerText: `${title}\n${j.description?.original ?? ""}`,
+      };
+    } catch {
+      return undefined; // network: try again later
+    }
+  }
+  if (source === "vinted") {
+    const photos = await galleryOf({ source, vintedId: id, photoUrls: [] });
+    if (!photos.length) return null;
+    return {
+      source, vintedId: id, title: it.t ?? "", price: it.$ ?? null,
+      listingUrl: it.u ?? `https://www.vinted.es/items/${id}`,
+      thumbUrl: it.p ?? photos[0], photoUrls: photos, sellerText: it.t ?? "",
+    };
+  }
+  return null;
+}
+
+async function ps4Backlog() {
+  const todo = Object.keys(S.seen).filter((k) => S.seen[k] === "PS4" && !S.ps4Checked[k]);
+  for (const [i, key] of todo.entries()) {
+    if (!isNight()) return;
+    await waitIfPaused();
+    status = "running";
+    statusText = `Noche: repasando tiras «PS4» ya vistas, foto a foto (${i + 1} de ${todo.length})`;
+    const l = await listingFor(key);
+    if (l === undefined) continue;
+    S.ps4Checked[key] = 1;
+    if (l && S.seen[key] === "PS4") {
+      const c = await readEachPhoto(l, SECOND_LOOK_PHOTOS, l.photoUrls);
+      const said = claimedStrip(l);
+      if (c) {
+        uncount(l.source, "PS4");
+        log(`${key} repaso nocturno: no era PS4`);
+        record(l, key, c.strip, null, "yes", c.photo);
+      } else if (said) {
+        sellerFind(itemOf(l, key, "PS4", null, "yes"), said);
+      }
+    }
+    save();
+  }
+}
+
 // A copy analyzed before claimedStrip existed: look again once.
 async function recheckClaim(l, key, said) {
   S.claimChecked[key] = 1;
@@ -469,11 +548,7 @@ async function recheckClaim(l, key, said) {
   const old = S.seen[key];
   const c = await readEachPhoto(l);
   if (c) {
-    if (STANDARD.has(old)) {
-      S.counts.byStrip[old]--;
-      S.counts.stripRead--;
-      S.bySource[l.source].stripRead--;
-    }
+    if (STANDARD.has(old)) uncount(l.source, old);
     log(`${key} el vendedor dice ${said}: leída al mirar foto a foto`);
     record(l, key, c.strip, null, "yes", c.photo);
     return;
@@ -540,6 +615,13 @@ async function handle(l) {
     S.claimChecked[key] = 1;
     const c = await readEachPhoto(l);
     if (c) ({ strip, photo: stripPhoto } = c);
+  } else if (strip === "PS4") {
+    S.ps4Checked[key] = 1;
+    const c = await readEachPhoto(l, SECOND_LOOK_PHOTOS);
+    if (c) {
+      log(`${key} segunda mirada: no era PS4`);
+      ({ strip, photo: stripPhoto } = c);
+    }
   }
   // Why no letters, when none: worth a manual look only if "ilegible".
   const reason = strip
@@ -689,6 +771,7 @@ async function sweep() {
       }
     }
     save();
+    await ps4Backlog();
   }
   S.sweep.nextAt = new Date(Date.now() + SWEEP_PAUSE_MS).toISOString();
   save();
@@ -699,11 +782,13 @@ listen();
 for (;;) {
   try {
     await waitIfPaused();
-    if (S.sweep.nextAt && Date.parse(S.sweep.nextAt) > Date.now()) {
+    while (S.sweep.nextAt && Date.parse(S.sweep.nextAt) > Date.now()) {
+      await ps4Backlog();
       status = "sleeping";
       statusText = `Vuelta completada; la siguiente mira solo anuncios nuevos.`;
       push(true);
-      await nap(Date.parse(S.sweep.nextAt) - Date.now());
+      // Wake hourly so the night's backlog starts on time.
+      await nap(Math.min(Date.parse(S.sweep.nextAt) - Date.now(), 3600_000));
       await waitIfPaused();
     }
     S.sweep.nextAt = null;
