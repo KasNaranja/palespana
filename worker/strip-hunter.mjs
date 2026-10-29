@@ -239,8 +239,31 @@ function onCommand(cmd) {
     log("play pedido desde la web");
     save();
     interrupt();
+  } else if (cmd === "purge") {
+    purgeNotPs4();
   }
   push(true);
+}
+
+/** Drops finds whose title names another console (false positives from
+ *  before the console filter worked) and un-counts their strips. */
+function purgeNotPs4() {
+  const gone = S.finds.filter((f) => !isPs4(f.title));
+  for (const f of gone) {
+    const strip = S.seen[f.key];
+    if (strip && S.counts.byStrip[strip]) {
+      if (--S.counts.byStrip[strip] <= 0) delete S.counts.byStrip[strip];
+      S.counts.stripRead = Math.max(0, S.counts.stripRead - 1);
+      const src = S.bySource[f.source];
+      if (src?.stripRead) src.stripRead--;
+    }
+    S.seen[f.key] = "-";
+    delete S.gameOf[f.key];
+  }
+  S.finds = S.finds.filter((f) => isPs4(f.title));
+  S.recent = S.recent.filter((it) => !gone.some((f) => f.key === it.key));
+  log(`limpieza pedida desde la web: ${gone.length} hallazgos de otras consolas quitados`);
+  save();
 }
 
 /** Holds the hunt while paused (between listings, never mid-analysis). */

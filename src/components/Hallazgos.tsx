@@ -269,6 +269,18 @@ export function Hallazgos() {
     void signalPc("hunt", c);
   }
 
+  // Asks the PC to drop the finds whose title names another console (PS3,
+  // PSP…); the list shrinks once it pushes its next snapshot.
+  const [purging, setPurging] = useState(false);
+  const findsCount = s?.finds.length;
+  useEffect(() => setPurging(false), [findsCount]);
+  function purge() {
+    setPurging(true);
+    lastAsk.current = Date.now();
+    void signalPc("hunt", "purge");
+    setTimeout(() => setPurging(false), 30_000);
+  }
+
   return (
     <section className="pt-6">
       <h1 className="font-display text-3xl text-white">Hallazgos</h1>
@@ -354,7 +366,19 @@ export function Hallazgos() {
 
           {/* Finds */}
           <div>
-            <h2 className="mb-3 font-display text-xl text-white">Tiras raras ({s.finds.length})</h2>
+            <div className="mb-3 flex flex-wrap items-center gap-3">
+              <h2 className="font-display text-xl text-white">Tiras raras ({s.finds.length})</h2>
+              {s.finds.length > 0 && (
+                <button
+                  type="button"
+                  onClick={purge}
+                  disabled={purging}
+                  className="ml-auto min-h-[36px] rounded-xl border border-borde-fuerte bg-panel px-3 text-sm font-semibold text-texto-1 transition hover:border-brand-500 disabled:opacity-40"
+                >
+                  {purging ? "Quitando…" : "Quitar los que no son de PS4"}
+                </button>
+              )}
+            </div>
             {s.finds.length === 0 ? (
               <p className="text-sm text-texto-3">Todavía ninguna. Cuando aparezca una, saldrá aquí con su enlace.</p>
             ) : (
