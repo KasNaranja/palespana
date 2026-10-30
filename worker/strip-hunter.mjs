@@ -437,7 +437,12 @@ function claimedStrip(l) {
   return RARE_CLAIM.find(([, re]) => re.test(m[2] ?? m[3]))?.[0] ?? null;
 }
 
-async function readEachPhoto(l, max = 8, photos = null) {
+// Only the letters looked for count: read alone, a back-cover photo can pass
+// its printed Blu-ray Disc logo off as the strip (a PS4-strip Batman Arkham
+// Knight came out "Blu-ray Disc, confirmed").
+const LOOKS_LIKE_PS4 = new Set(["PSP", "PS3"]);
+
+async function readEachPhoto(l, accept, max = 8, photos = null) {
   for (const p of (photos ?? (await galleryOf(l))).slice(0, max)) {
     let v;
     try {
@@ -446,7 +451,7 @@ async function readEachPhoto(l, max = 8, photos = null) {
       break;
     }
     const s = readStrip(v);
-    if (s && !STANDARD.has(s)) return { strip: s, photo: p };
+    if (s && accept.has(s)) return { strip: s, photo: p };
   }
   return null;
 }
@@ -524,7 +529,7 @@ async function ps4Backlog(batch = BACKLOG_BATCH) {
     if (l === undefined) continue;
     S.ps4Checked[key] = 1;
     if (l && S.seen[key] === "PS4") {
-      const c = await readEachPhoto(l, SECOND_LOOK_PHOTOS, l.photoUrls);
+      const c = await readEachPhoto(l, LOOKS_LIKE_PS4, SECOND_LOOK_PHOTOS, l.photoUrls);
       const said = claimedStrip(l);
       if (c) {
         uncount(l.source, "PS4");
@@ -543,7 +548,7 @@ async function recheckClaim(l, key, said) {
   S.claimChecked[key] = 1;
   await waitIfPaused();
   const old = S.seen[key];
-  const c = await readEachPhoto(l);
+  const c = await readEachPhoto(l, new Set([said]));
   if (c) {
     if (STANDARD.has(old)) uncount(l.source, old);
     log(`${key} el vendedor dice ${said}: leída al mirar foto a foto`);
@@ -610,11 +615,11 @@ async function handle(l) {
   const said = claimedStrip(l);
   if (said && strip !== said && r.sealed !== "no") {
     S.claimChecked[key] = 1;
-    const c = await readEachPhoto(l);
+    const c = await readEachPhoto(l, new Set([said]));
     if (c) ({ strip, photo: stripPhoto } = c);
   } else if (strip === "PS4") {
     S.ps4Checked[key] = 1;
-    const c = await readEachPhoto(l, SECOND_LOOK_PHOTOS);
+    const c = await readEachPhoto(l, LOOKS_LIKE_PS4, SECOND_LOOK_PHOTOS);
     if (c) {
       log(`${key} segunda mirada: no era PS4`);
       ({ strip, photo: stripPhoto } = c);
