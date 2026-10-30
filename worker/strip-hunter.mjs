@@ -118,6 +118,8 @@ const blank = () => ({
   items: {}, // sealed listing key → {t: title, u: url, p: photo, $: price}, for the per-game lists
   claimChecked: {}, // keys whose seller-claimed rare strip was already looked for (see claimedStrip)
   ps4Checked: {}, // keys read "PS4" that got the photo-by-photo second look (see ps4Backlog)
+  rechecked: {}, // keys already re-read by recheckGame
+  recheckQueue: [], // games still to re-read, in order ("recheck-all")
   paused: false,
 });
 let S = fs.existsSync(STATE_FILE) ? { ...blank(), ...JSON.parse(fs.readFileSync(STATE_FILE, "utf8")) } : blank();
@@ -262,6 +264,11 @@ function onCommand(cmd) {
     dismissFind(cmd.slice(8));
   } else if (cmd.startsWith("recheck:")) {
     void recheckGame(cmd.slice(8));
+  } else if (cmd === "recheck-all") {
+    // Every game, in search order, before the sweep goes on (see drainRechecks).
+    S.recheckQueue = [...QUERIES];
+    log(`repaso completo pedido: ${QUERIES.length} juegos`);
+    save();
   }
   push(true);
 }
@@ -293,15 +300,21 @@ function dismissFind(key) {
 // rules (seller's claim, PS4/PSP second look), on request.
 let rechecking = false;
 async function recheckGame(game) {
-  if (rechecking) return;
+  while (rechecking) await sleep(5_000);
   rechecking = true;
   try {
     const keys = Object.keys(S.gameOf).filter(
-      (k) => S.gameOf[k] === game && (STANDARD.has(S.seen[k]) || S.seen[k] === "0")
+      (k) =>
+        S.gameOf[k] === game && !S.rechecked[k] && (STANDARD.has(S.seen[k]) || S.seen[k] === "0")
     );
     log(`repaso pedido de «${game}»: ${keys.length} copias`);
-    for (const key of keys) {
+    for (const [i, key] of keys.entries()) {
+      await waitIfPaused();
+      status = "running";
+      statusText = `Repasando «${game}» foto a foto (${i + 1} de ${keys.length})`;
       const l = await listingFor(key);
+      if (l === undefined) continue; // network: the next pass
+      S.rechecked[key] = 1;
       if (!l) continue;
       const said = claimedStrip(l);
       const c = await readEachPhoto(
@@ -326,6 +339,16 @@ async function recheckGame(game) {
     log(`repaso de «${game}» terminado`);
   } finally {
     rechecking = false;
+  }
+}
+
+// The games queued by "recheck-all", one by one, saved after each so a
+// restart picks up where it was.
+async function drainRechecks() {
+  while (S.recheckQueue.length) {
+    await recheckGame(S.recheckQueue[0]);
+    S.recheckQueue.shift();
+    save();
   }
 }
 
@@ -819,6 +842,7 @@ async function sweep() {
   status = "running";
   for (; S.sweep.index < QUERIES.length; S.sweep.index++) {
     await waitIfPaused();
+    await drainRechecks();
     const q = QUERIES[S.sweep.index];
     for (const source of SOURCES) {
       current = { text: q, source };
@@ -860,6 +884,7 @@ for (;;) {
   try {
     await waitIfPaused();
     if (S.sweep.nextAt && Date.parse(S.sweep.nextAt) > Date.now()) {
+      await drainRechecks();
       await ps4Backlog(Infinity);
       status = "sleeping";
       statusText = `Vuelta completada; la siguiente mira solo anuncios nuevos.`;
