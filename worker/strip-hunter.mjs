@@ -774,6 +774,14 @@ async function sweep() {
   save();
 }
 
+// It runs hidden: without these a crash left no trace (the launcher restarts it).
+process.on("unhandledRejection", (e) => log(`error sin capturar: ${e?.stack ?? e}`));
+process.on("uncaughtException", (e) => {
+  log(`caída: ${e?.stack ?? e}`);
+  process.exit(1);
+});
+process.on("exit", (code) => log(`cerrado (código ${code})`));
+
 log(`arrancado; ${QUERIES.length} búsquedas, ${Object.keys(S.seen).length} anuncios ya vistos`);
 listen();
 for (;;) {
