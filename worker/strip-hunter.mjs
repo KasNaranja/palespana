@@ -258,8 +258,75 @@ function onCommand(cmd) {
     selection = listGame(cmd.slice(5));
   } else if (cmd === "purge") {
     purgeNotPs4();
+  } else if (cmd.startsWith("dismiss:")) {
+    dismissFind(cmd.slice(8));
+  } else if (cmd.startsWith("recheck:")) {
+    void recheckGame(cmd.slice(8));
   }
   push(true);
+}
+
+// The owner looked at a find and the strip is the normal PS4 one.
+function dismissFind(key) {
+  if (!S.finds.some((f) => f.key === key)) return;
+  S.finds = S.finds.filter((f) => f.key !== key);
+  const old = S.seen[key];
+  if (old !== "PS4") {
+    const wasStrip = old && old !== "0" && old !== "x" && old !== "-";
+    if (wasStrip && S.counts.byStrip[old]) S.counts.byStrip[old]--;
+    if (wasStrip && !S.counts.byStrip[old]) delete S.counts.byStrip[old];
+    if (!wasStrip) {
+      S.counts.stripRead++;
+      S.bySource[key.split(":")[0]].stripRead++;
+    }
+    S.counts.byStrip.PS4 = (S.counts.byStrip.PS4 ?? 0) + 1;
+    S.seen[key] = "PS4";
+  }
+  S.ps4Checked[key] = 1;
+  S.claimChecked[key] = 1;
+  for (const r of S.recent) if (r.key === key) r.strip = "PS4";
+  log(`${key} descartado desde la web: es PS4`);
+  save();
+}
+
+// Every sealed copy of one game read again photo by photo with the latest
+// rules (seller's claim, PS4/PSP second look), on request.
+let rechecking = false;
+async function recheckGame(game) {
+  if (rechecking) return;
+  rechecking = true;
+  try {
+    const keys = Object.keys(S.gameOf).filter(
+      (k) => S.gameOf[k] === game && (STANDARD.has(S.seen[k]) || S.seen[k] === "0")
+    );
+    log(`repaso pedido de «${game}»: ${keys.length} copias`);
+    for (const key of keys) {
+      const l = await listingFor(key);
+      if (!l) continue;
+      const said = claimedStrip(l);
+      const c = await readEachPhoto(
+        l,
+        said ? new Set([said]) : LOOKS_LIKE_PS4,
+        said ? 8 : SECOND_LOOK_PHOTOS,
+        l.photoUrls
+      );
+      S.ps4Checked[key] = 1;
+      if (said) S.claimChecked[key] = 1;
+      const old = S.seen[key];
+      if (c) {
+        if (STANDARD.has(old)) uncount(l.source, old);
+        S.finds = S.finds.filter((f) => f.key !== key);
+        log(`${key} repaso de «${game}»: ${c.strip}`);
+        record(l, key, c.strip, null, "yes", c.photo);
+      } else if (said && !S.finds.some((f) => f.key === key)) {
+        sellerFind(itemOf(l, key, STANDARD.has(old) ? old : null, null, "yes"), said);
+      }
+      save();
+    }
+    log(`repaso de «${game}» terminado`);
+  } finally {
+    rechecking = false;
+  }
 }
 
 // The sealed copies of one game, asked for by the dashboard (a click on a

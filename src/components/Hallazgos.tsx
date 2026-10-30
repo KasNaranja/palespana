@@ -84,13 +84,19 @@ function Stat({ label, value }: { label: string; value: number | string }) {
   );
 }
 
+// The owner checked the photos and the strip is the normal one: the PC drops
+// the find and counts the copy as PS4. Hidden here at once; the next snapshot
+// no longer has it.
 function FindCard({ f }: { f: HuntFind }) {
+  const [dismissed, setDismissed] = useState(false);
+  if (dismissed) return null;
   return (
+    <div className="flex flex-col overflow-hidden rounded-card border border-brand-600/60 bg-panel transition hover:border-brand-500">
     <a
       href={f.url}
       target="_blank"
       rel="noopener noreferrer"
-      className="flex flex-col overflow-hidden rounded-card border border-brand-600/60 bg-panel transition hover:border-brand-500"
+      className="flex flex-1 flex-col"
     >
       <div className="relative aspect-[3/4] w-full bg-carbon">
         {f.photo && (
@@ -114,9 +120,21 @@ function FindCard({ f }: { f: HuntFind }) {
         <div className="text-xs text-texto-3">
           {MARKET_LABELS[f.source]} · {ago(f.at)}
         </div>
+        {f.note && !f.confirmed && <div className="text-xs text-texto-3">{f.note}</div>}
         <div className="mt-auto font-display text-xl text-white">{formatPrice(f.price, "EUR")}</div>
       </div>
     </a>
+    <button
+      type="button"
+      onClick={() => {
+        setDismissed(true);
+        void signalPc("hunt", "dismiss:" + f.key);
+      }}
+      className="min-h-[40px] border-t border-borde text-sm font-semibold text-texto-2 transition hover:bg-panel2 hover:text-texto-1"
+    >
+      Descartar: es PS4
+    </button>
+    </div>
   );
 }
 
