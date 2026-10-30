@@ -494,7 +494,7 @@ async function listingFor(key) {
       const title = j.title?.original ?? it.t ?? "";
       return {
         source, vintedId: id, title, price: j.price?.amount ?? it.$ ?? null,
-        listingUrl: j.web_slug ? `https://es.wallapop.com/item/${j.web_slug}` : it.u ?? null,
+        listingUrl: (j.slug ?? j.web_slug) ? `https://es.wallapop.com/item/${j.slug ?? j.web_slug}` : it.u ?? null,
         thumbUrl: it.p ?? photos[0] ?? null, photoUrls: photos,
         sellerText: `${title}\n${j.description?.original ?? ""}`,
       };
