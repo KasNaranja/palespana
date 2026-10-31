@@ -203,6 +203,10 @@ interface SearchRecord {
   lastSeenAt: number;
   /** The client that owned it started a new search: stop analyzing. */
   superseded: boolean;
+  /** Bumped on every verdict change; each listing remembers the value of its
+   *  last change, so a poll can fetch only what changed since its last one. */
+  rev: number;
+  revOf: Map<Listing, number>;
 }
 
 // A search nobody polls for this long is not being watched: its analysis is
@@ -237,6 +241,8 @@ export function createSearch(meta: SearchMeta, listings: Listing[]): void {
     listings: listings.map((l) => ({ ...l })),
     lastSeenAt: now,
     superseded: false,
+    rev: 0,
+    revOf: new Map(),
   });
 }
 
@@ -271,6 +277,20 @@ export function getListings(searchId: string): Listing[] {
   const rec = searches.get(searchId);
   if (!rec) return [];
   return rec.listings.map((l) => ({ ...l }));
+}
+
+/** Listings whose verdict changed after `since` (a rev from an earlier
+ *  call), plus the current rev to pass next time. */
+export function getListingsSince(
+  searchId: string,
+  since: number
+): { listings: Listing[]; rev: number } {
+  const rec = searches.get(searchId);
+  if (!rec) return { listings: [], rev: 0 };
+  const listings = rec.listings
+    .filter((l) => (rec.revOf.get(l) ?? 0) > since)
+    .map((l) => ({ ...l }));
+  return { listings, rev: rec.rev };
 }
 
 /**
@@ -308,6 +328,7 @@ export function updateListingVerdict(
       l.sealed = sealed;
       l.sealStrip = strip;
       l.analyzedAt = analyzedAt;
+      rec.revOf.set(l, ++rec.rev);
     }
   }
   if (verdict !== "pending" && persist) {

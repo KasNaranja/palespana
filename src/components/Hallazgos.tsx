@@ -368,7 +368,7 @@ export function Hallazgos() {
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       return r.json();
     },
-    refetchInterval: 3000,
+    refetchInterval: 6000, // the PC pushes every 5 s; faster only wastes bandwidth
   });
 
   const s = q.data?.snapshot ?? null;

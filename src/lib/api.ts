@@ -49,8 +49,12 @@ export async function postSearch(
   return res.json();
 }
 
-export async function getStatus(searchId: string): Promise<StatusResponse> {
-  const res = await fetch(`/api/search/${searchId}/status`, {
+export async function getStatus(
+  searchId: string,
+  since?: number
+): Promise<StatusResponse> {
+  const q = since === undefined ? "" : `?since=${since}`;
+  const res = await fetch(`/api/search/${searchId}/status${q}`, {
     cache: "no-store",
   });
   if (!res.ok) throw await asError(res);

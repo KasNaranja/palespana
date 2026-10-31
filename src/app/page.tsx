@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { SearchBox } from "@/components/SearchBox";
 import { ConsoleChips } from "@/components/ConsoleChips";
 import { RecentSearches } from "@/components/RecentSearches";
@@ -27,6 +27,7 @@ import type {
   SearchResponse,
   SourceInfo,
   SourceProgress,
+  StatusResponse,
 } from "@/lib/types";
 
 interface ActiveSearch {
@@ -89,9 +90,22 @@ export default function Home() {
     }
   );
 
+  // Polls ask only for what changed since the previous answer and merge it
+  // into the listings already held (the full list every 1.5 s used up
+  // Render's free bandwidth).
+  const queryClient = useQueryClient();
   const status = useQuery({
     queryKey: ["status", active?.id],
-    queryFn: () => getStatus(active!.id),
+    queryFn: async () => {
+      const prev = queryClient.getQueryData<StatusResponse>(["status", active!.id]);
+      const next = await getStatus(active!.id, prev?.rev);
+      if (!prev || !next.partial) return next;
+      const changed = new Map(next.listings.map((l) => [l.source + ":" + l.vintedId, l]));
+      return {
+        ...next,
+        listings: prev.listings.map((l) => changed.get(l.source + ":" + l.vintedId) ?? l),
+      };
+    },
     enabled: !!active && active.total > 0,
     refetchInterval: (q) => (q.state.data?.done ? false : 1500),
     // Keep polling in a background tab: the server pauses the analysis of

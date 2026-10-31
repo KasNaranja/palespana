@@ -182,6 +182,8 @@ export interface StatusResponse {
   total: number;
   done: boolean;
   sources: Record<MarketSource, SourceProgress>; // one entry per marketplace
+  rev: number; // pass back as ?since= to get only later changes
+  partial: boolean; // listings holds only the changes since ?since=
 }
 
 /** A verdict the browser already had, handed back when it re-runs a search

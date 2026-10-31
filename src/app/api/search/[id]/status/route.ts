@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { countAnalyzed, getListings, getSearch, touchSearch } from "@/lib/db";
+import { countAnalyzed, getListingsSince, getSearch, touchSearch } from "@/lib/db";
 import { startAnalysis } from "@/lib/analyzer";
 import { MARKET_SOURCES, publicListing } from "@/lib/types";
 import type {
@@ -13,7 +13,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET(
-  _req: Request,
+  req: Request,
   { params }: { params: { id: string } }
 ) {
   const search = getSearch(params.id);
@@ -28,7 +28,12 @@ export async function GET(
   // it if it had been paused as abandoned — see the self-heal below).
   touchSearch(params.id);
 
-  const listings = getListings(params.id).map(publicListing);
+  // ?since=<rev> → only the listings that changed after that poll: sending
+  // the whole list every 1.5 s burned Render's monthly bandwidth.
+  const sinceRaw = new URL(req.url).searchParams.get("since");
+  const since = sinceRaw === null ? -1 : Number(sinceRaw) || 0;
+  const { listings: raw, rev } = getListingsSince(params.id, since);
+  const listings = raw.map(publicListing);
   const analyzed = countAnalyzed(params.id);
   const done = analyzed >= search.total;
 
@@ -53,6 +58,8 @@ export async function GET(
   const res: StatusResponse = {
     search,
     listings,
+    rev,
+    partial: since >= 0,
     analyzed,
     total: search.total,
     done,
